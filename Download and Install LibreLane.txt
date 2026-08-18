@@ -1,0 +1,7 @@
+python3 -m pip install librelane
+
+python3 -m librelane --dockerized --smoke-test 
+
+or
+
+python3 -m librelane --dockerized --run-example spm
