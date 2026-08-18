@@ -1,0 +1,8 @@
+xhost +local:
+
+or 
+
+export DISPLAY=:1.0
+export XAUTHORITY=/home/codespace/.Xauthority
+
+klayout <path-to-the-gds-file>
