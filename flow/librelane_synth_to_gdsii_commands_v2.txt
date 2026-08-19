@@ -1,0 +1,130 @@
+================================================================================
+ LibreLane : SYNTHESIS -> GDSII
+================================================================================
+
+TAG=example_run
+
+
+--------------------------------------------------------------------------------
+ OPTION A - EVERYTHING IN ONE COMMAND
+--------------------------------------------------------------------------------
+
+python3 -m librelane --dockerized ./config.json --run-tag $TAG
+
+
+--------------------------------------------------------------------------------
+ OPTION B - STEP BY STEP (run in this exact order)
+--------------------------------------------------------------------------------
+
+# 1  Synthesis (RTL -> gate-level netlist)
+
+python3 -m librelane --dockerized ./config.json --run-tag $TAG --to Yosys.Synthesis
+
+# 2  Floorplanning (die/core area + placement site grid)
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.Floorplan --to OpenROAD.Floorplan
+
+
+# 3  Tap / Endcap cell insertion
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.TapEndcapInsertion --to OpenROAD.TapEndcapInsertion
+
+# 4  I/O pin placement
+
+#When default IO placement use the below
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.IOPlacement --to OpenROAD.IOPlacement
+
+#When custom IO placement use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --from Odb.CustomIOPlacement --to Odb.CustomIOPlacement
+
+# 5  Power Distribution Network
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GeneratePDN --to OpenROAD.GeneratePDN
+
+# 6  Global placement
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GlobalPlacement --to OpenROAD.GlobalPlacement
+
+# 7  Detailed placement (legalization)
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.DetailedPlacement --to OpenROAD.DetailedPlacement
+
+# 8  Clock Tree Synthesis
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.CTS --to OpenROAD.CTS
+
+# 9  Global routing
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GlobalRouting --to OpenROAD.GlobalRouting
+
+# 10 Detailed routing (longest step)
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.DetailedRouting --to OpenROAD.DetailedRouting
+
+# 11 Fill / decap insertion
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.FillInsertion --to OpenROAD.FillInsertion
+
+# 12 Parasitic extraction (SPEF)
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.RCX --to OpenROAD.RCX
+
+# 13 Post-PnR Static Timing Analysis
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.STAPostPNR --to OpenROAD.STAPostPNR
+
+# 14 Stream-out  <<< PRODUCES THE GDSII >>>
+
+python3 -m librelane --dockerized ./config.json  --last-run --from KLayout.StreamOut --to KLayout.StreamOut
+
+
+=============
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Magic.StreamOut
+
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to KLayout.XOR
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Checker.XOR
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Magic.SpiceExtraction
+
+python3 -m librelane --dockerized ./config.json --last-run --from Netgen.LVS --to Netgen.LVS
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+
+
+
+==========================================
+
+
+
+=================================================
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Magic.DRC
+
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.DRC --to KLayout.DRC
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+
+python3 -m librelane --dockerized ./config.json --last-run --from Checker.TrDRC --to Checker.TrDRC
+
+
+
+
+====================================================================
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CheckAntennas --to OpenROAD.CheckAntennas
+
+python3 -m librelane --dockerized ./config.json --last-run --from Checker.IllegalOverlap --to Checker.IllegalOverlap
+
+
+====================================================================
+#For the purpose of GUI viewing
+
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInKLayout
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInMagic
+
+
+

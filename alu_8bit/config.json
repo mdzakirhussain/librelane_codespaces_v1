@@ -1,0 +1,15 @@
+{
+    "DESIGN_NAME": "alu_8bit",
+
+    "VERILOG_FILES": [
+        "dir::src/alu_8bit.v"
+    ],
+
+    "CLOCK_PORT": null,
+    "CLOCK_PERIOD": 10,
+
+   "IO_PIN_ORDER_CFG": "dir::pin_order.cfg",
+
+    "FP_CORE_UTIL": 25,
+    "PL_TARGET_DENSITY": 0.50
+}

@@ -1,0 +1,2074 @@
+================================================================================
+ LibreLane MASTER COMMAND REFERENCE  (v3)
+ RTL -> GDSII, plus signoff, GUIs, and debugging
+================================================================================
+
+ v3 STATUS: EVERY COMMAND IN SECTIONS 4, 4A AND 5 HAS NOW BEEN EXECUTED
+ INDIVIDUALLY AND CONFIRMED. See section 17 for the full matrix:
+   * all 80 Classic steps run one at a time with --only, in flow order
+   * all 18 "Whole group" range commands run on a separate tag
+   * 98/98 exited 0; both runs produced a clean, 0-violation GDSII
+ Test design: rca (4-bit ripple carry adder), /home/zakir/Desktop/rca
+
+ WHAT CHANGED v2 -> v3
+   [FIX]  Section 4A described only TWO outcomes (gated / self-skipped). There
+          are FOUR, and THREE of them look identical on disk. You cannot tell
+          what a step did by listing its directory. Rewritten - see 4A.
+   [FIX]  Section 4A implied "directory with no tool log = step self-skipped".
+          FALSE. Every Checker.* step and Misc.ReportManufacturability produce
+          exactly that layout and DID run, emitting metrics normally.
+   [NEW]  Composite steps (e.g. OpenROAD.RepairAntennas) put their tool logs in
+          NUMBERED SUB-DIRECTORIES, so the parent looks log-less but ran.
+   [NEW]  4A.3 - complete verified table of every self-skipping step, its
+          trigger condition, and its exact log message.
+   [FIX]  Section 7.1 listed two IO-placement steps that self-select. There are
+          THREE: OpenROAD.GlobalPlacementSkipIO also returns state unaltered
+          when IO_PIN_ORDER_CFG or FP_DEF_TEMPLATE is set.
+   [NEW]  Odb.DiodesOnPorts is disabled by DIODE_ON_PORTS='none' - a plain
+          config value, not a RUN_* gating variable. Different mechanism again.
+   [NEW]  Section 17 - the verification matrix.
+
+ Verified against : LibreLane v3.0.6  (output of `python3 -m librelane --version`)
+ PDK used         : sky130A, PDK root /home/zakir/.ciel
+ Container image  : ghcr.io/librelane/librelane:3.0.6
+
+ Verified how     : (1) every flag was taken from the live output of
+                        `python3 -m librelane --help` and
+                        `python3 -m librelane.steps --help` on this machine;
+                    (2) every step ID was generated from the installed flow
+                        definitions, not typed by hand;
+                    (3) EVERY STAGE-BY-STAGE COMMAND IN SECTIONS 4 AND 5 WAS
+                        ACTUALLY EXECUTED, end to end, on a real design
+                        (mux8x1) and taken all the way to a clean GDSII.
+                        See section 16 for that worked example.
+ Cross-checked    : https://librelane.readthedocs.io/en/stable/
+
+ Consolidated from: libralene_walkthrough_v1.txt
+                    librelane_synth_to_gdsii_commands.txt
+                    librelane_synth_to_gdsii_commands_v2.txt
+                    libre_v1.txt
+
+ WHAT CHANGED FROM v1 -> v2 (all found by running the commands, not reading)
+   [NOTE] --docker-no-tty is needed ONLY when stdin is not a terminal
+          (scripts, pipelines, CI, agents). In a normal interactive shell the
+          plain --dockerized commands in this document work as-is - verified
+          by a controlled TTY-vs-no-TTY test in section 1. Sections 4 and 5
+          deliberately show the plain form.
+   [FIX]  Section 4.2's v1 command re-ran the flow from step 1. Corrected to a
+          --last-run continuation. See section 4.2 and section 11 rule (11).
+   [FIX]  v1 rule (4) told you not to skip OpenROAD.RepairDesignPostGRT and
+          OpenROAD.ResizerTimingPostGRT. Both are OFF BY DEFAULT and upstream
+          marks them experimental. Corrected in section 11 rule (4).
+   [FIX]  v1 section 10 claimed step directory numbers mirror the section 12
+          ordinals exactly. They do not. Corrected with the real formula and a
+          verified mapping table in section 10.
+   [NEW]  Section 4A: gating variables (RUN_*). Four Classic steps are gated
+          off by default. This is a different mechanism from the self-skipping
+          steps in section 7, and it behaves differently on disk.
+   [NEW]  Section 16: complete verified worked example (mux8x1), including the
+          exact config.json and pin_order.cfg that produced a 0-violation
+          GDSII.
+
+ IMPORTANT: step IDs and flag names are version-specific. If you upgrade
+ LibreLane, regenerate section 12 before trusting section 4 onwards.
+
+
+================================================================================
+ CONTENTS
+================================================================================
+  0.  Before you start
+  1.  Invocation forms (native vs dockerized)   <- READ THE TTY NOTE
+  2.  Choosing a flow
+  3.  Option A - run the whole flow in one command
+  4.  Option B - run stage by stage (Classic flow)
+  4A. Gating variables (RUN_*) - steps that are OFF by default
+  5.  Signoff / verification
+  6.  Opening results in a GUI
+  7.  Manual vs default: where you actually have a choice
+  8.  Run control flags (full list)
+  9.  Running / re-running a single step outside a flow
+ 10.  Output directory layout
+ 11.  Rules you must not break
+ 12.  Complete ordered step lists (Classic / Chip / VHDLClassic)
+ 13.  Steps that exist but are NOT in the Classic flow
+ 14.  Troubleshooting
+ 15.  Notes carried over from the source files (design-specific)
+ 16.  Verified worked example - mux8x1, RTL to clean GDSII
+ 17.  VERIFICATION MATRIX - every command in sections 4, 4A and 5
+
+
+================================================================================
+ 0.  BEFORE YOU START
+================================================================================
+
+Run every command from the design directory - the one containing config.json.
+
+    cd /home/zakir/Desktop/fulladder
+
+Set a run tag once per shell session:
+
+    export TAG=example_run
+
+Sanity checks:
+
+    python3 -m librelane --version
+    python3 -m librelane --help
+    python3 -m librelane --smoke-test
+
+`--smoke-test` runs a complete throwaway flow and discards the results. It is
+the fastest way to prove your install + PDK are working.
+
+
+================================================================================
+ 1.  INVOCATION FORMS (NATIVE vs DOCKERIZED)
+================================================================================
+
+There are three equivalent entry points. Pick one and stay consistent.
+
+  (a) Native, installed console script:
+
+      librelane ./config.json
+
+  (b) Native, via the Python module (identical behaviour, works even if the
+      console script is not on PATH):
+
+      python3 -m librelane ./config.json
+
+  (c) Containerized - LibreLane pulls/uses a Docker image and re-invokes
+      itself inside it:
+
+      python3 -m librelane --dockerized ./config.json
+
+`--containerized` is an accepted alias for `--dockerized`. Neither is
+deprecated; they are the same option.
+
+ARGUMENT ORDER RULE (enforced by the code, not just convention):
+
+    --dockerized must precede ALL other options and the config file.
+    The ONLY options allowed before it are:
+        -m / --docker-mount   / --container-mount
+             --docker-tty     / --container-tty
+             --docker-no-tty  / --container-no-tty
+
+    CORRECT:
+        python3 -m librelane --dockerized ./config.json --only Yosys.Synthesis
+        python3 -m librelane --docker-mount /data --dockerized ./config.json
+
+    WRONG (everything after ./config.json is silently handed to the container
+    but --dockerized itself is not seen where you expect it):
+        python3 -m librelane ./config.json --dockerized --only Yosys.Synthesis
+
+TTY NOTE - ONLY APPLIES IF YOUR SHELL HAS NO TERMINAL
+
+    IF YOU ARE TYPING INTO A NORMAL TERMINAL, IGNORE THIS AND USE THE PLAIN
+    --dockerized COMMANDS THROUGHOUT THIS DOCUMENT. Nothing extra is needed.
+
+    The default is --docker-tty, i.e. LibreLane passes -t to docker. That is
+    correct and works in any interactive shell.
+
+    It only breaks where stdin is NOT a terminal - a pipeline, `bash -c`, a
+    cron job, ssh without -t, CI, or an automation/agent harness. There the
+    first dockerized command dies immediately with:
+
+        INFO  Running containerized command:
+        cannot attach stdin to a TTY-enabled container because stdin is not a terminal
+
+    Nothing runs and no run directory is created. The fix is --docker-no-tty,
+    which like --docker-mount MUST come BEFORE --dockerized:
+
+        python3 -m librelane --docker-no-tty --dockerized ./config.json --run-tag "$TAG"
+
+    CONTROLLED TEST (same command, same design, only the TTY differs):
+
+        shell state          flag used          result
+        -------------------  -----------------  ---------------------------
+        `tty` -> not a tty   (none)             exit 1, TTY error above
+        real PTY (`script`)  (none)             exit 0, "Flow complete"
+
+    So the flag is ENVIRONMENT-SPECIFIC, not a general requirement. Add it in
+    scripts and CI; leave it out when working by hand. It is harmless if
+    present, so scripts intended to run in both places can keep it.
+
+    Placing it after --dockerized has NO EFFECT - it is silently forwarded
+    into the container as a flow argument instead of configuring the engine.
+
+Mounting an extra directory into the container:
+
+    python3 -m librelane --docker-mount /path/to/dir --dockerized ./config.json
+
+A valid directory is mounted at the same path inside the container.
+
+CAVEAT (verified against librelane/container.py): the --help text says a
+non-directory value "will be passed to the container engine verbatim". That is
+misleading. The code does:
+
+        mount_args += ["-v", f"{mount}"]
+
+i.e. the value is ALWAYS consumed as the argument of a -v flag. You can use it
+to write a raw bind-mount spec such as /host/path:/container/path:ro, but you
+CANNOT use it to inject other engine flags. In particular this does NOT work:
+
+        --docker-mount "-e LIBGL_ALWAYS_SOFTWARE=1"      # becomes -v "-e LIBGL_..."
+
+The only environment variables LibreLane forwards into the container are
+DISPLAY (for GUIs), PDK_ROOT, PDK and STD_CELL_LIBRARY. To set anything else
+you must invoke the container engine yourself instead of using --dockerized.
+
+X11 / GUI under --dockerized: LibreLane forwards $DISPLAY, mounts
+/tmp/.X11-unix and ~/.Xauthority, and runs with `--network host`
+automatically. If windows still do not appear, allow local connections:
+
+    xhost +local:docker
+
+If $DISPLAY is unset you get a warning and GUI steps will not work.
+
+TILDE WARNING: LibreLane rejects paths beginning with `~` that the shell has
+not expanded. `--pdk-root ~/.ciel` is fine (bash expands it);
+`--pdk-root=~/.ciel` and `--pdk-root "~/.ciel"` are both rejected with an
+error. Use an absolute path if in doubt.
+
+
+================================================================================
+ 2.  CHOOSING A FLOW
+================================================================================
+
+Built-in flows in v3.0.6 (the -f/--flow choice list is case-insensitive, so
+`--flow Classic` and `--flow classic` are both accepted):
+
+    Classic               80 steps. RTL(Verilog) -> GDSII + full signoff.
+                          THIS IS THE DEFAULT. Everything in sections 3-5
+                          assumes it.
+    Chip                  83 steps. Classic + pad ring, seal ring, filler,
+                          density and KLayout antenna checks. For full chips.
+    VHDLClassic           72 steps. Classic but entered via Yosys.VHDLSynthesis
+                          instead of Verilator lint + Yosys.Synthesis.
+    Optimizing            6 steps.  Synthesis -> global placement only.
+    SynthesisExploration  3 steps.  Synthesis + pre-PnR STA only.
+    OpenInKLayout         1 step.   KLayout.OpenGUI
+    OpenInOpenROAD        1 step.   OpenROAD.OpenGUI
+    OpenInMagic           1 step.   Magic.OpenGUI
+
+Selecting a flow explicitly:
+
+    python3 -m librelane --dockerized ./config.json --flow Classic --run-tag "$TAG"
+    python3 -m librelane --dockerized ./config.json --flow Chip    --run-tag "$TAG"
+
+If you omit --flow, the flow named in config.json's `meta.flow` is used, and
+Classic is the fallback.
+
+
+================================================================================
+ 3.  OPTION A - RUN THE WHOLE FLOW IN ONE COMMAND
+================================================================================
+
+This is what you should normally do. Use section 4 only when debugging.
+
+Fresh run with a named tag:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG"
+
+Run with an auto-generated tag (RUN_YYYY-MM-DD_HH-MM-SS):
+
+    python3 -m librelane --dockerized ./config.json
+
+Re-run the same tag from scratch, wiping the previous contents:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --overwrite
+
+Resume the most recent run from where it stopped:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CTS
+
+Run the whole flow but skip specific steps:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --skip Yosys.EQY
+
+Also copy the final views out to a directory of your choosing:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --save-views-to ./out
+
+
+================================================================================
+ 4.  OPTION B - RUN STAGE BY STAGE  (Classic flow)
+================================================================================
+
+Run these IN THIS EXACT ORDER. Section 11 explains why the order is not
+optional and why running out of order does not raise an error.
+
+SYNTAX NOTE
+    --only X   is the built-in shorthand for  --from X --to X
+               It is a real flag in v3.0.6, and it OVERRIDES both --from and
+               --to if all three are given. Prefer it for single steps.
+    --from A --to B  runs EVERY step from A through B inclusive, not just the
+               two named ones.
+
+TAG NOTE
+    The first command creates the run, so it uses --run-tag "$TAG".
+    Every command after it continues that run, so it uses --last-run.
+    --run-tag and --last-run are MUTUALLY EXCLUSIVE - never pass both.
+    Alternative that is equally valid: use --run-tag "$TAG" on every single
+    command. That is unambiguous even if other runs exist. Just do not mix.
+
+
+--------------------------------------------------------------------------------
+ 4.1  LINT  (steps 1-4)
+--------------------------------------------------------------------------------
+Verilator lints the RTL; the checkers fail the flow on syntax errors, latch
+inference and non-synthesisable timing constructs. Cheap, and catches problems
+before you burn an hour on placement.
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to Checker.LintWarnings
+
+Single steps:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Verilator.Lint
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.LintErrors
+
+
+--------------------------------------------------------------------------------
+ 4.2  SYNTHESIS  (steps 5-12)
+--------------------------------------------------------------------------------
+Yosys maps RTL onto PDK standard cells. Trailing checkers catch unmapped cells
+and stray assign statements; STAPrePNR gives a first timing estimate with
+ideal wires.
+
+Whole group - CORRECT FORM (continues the run created in 4.1):
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Yosys.JsonHeader --to OpenROAD.STAPrePNR
+
+  DO NOT USE (this was v1's command, and it is wrong here):
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to OpenROAD.STAPrePNR
+
+  VERIFIED FAILURE MODE: --to without --from starts at step 1, so this
+  re-runs Verilator.Lint and the three lint checkers a SECOND time inside the
+  same run directory. Observed result - lint appears twice and every later
+  ordinal is shifted by 4:
+
+        01-verilator-lint                 <- first invocation
+        02-checker-linttimingconstructs
+        03-checker-linterrors
+        04-checker-lintwarnings
+        05-verilator-lint                 <- SAME STEPS AGAIN
+        06-checker-linttimingconstructs
+        07-checker-linterrors
+        08-checker-lintwarnings
+        09-yosys-jsonheader
+        10-yosys-synthesis                <- expected 06
+
+  It does not error, it just wastes time and makes every directory number in
+  section 10 wrong. Once you have created the run in 4.1, every subsequent
+  stage must use --last-run --from … --to … .
+
+Synthesis alone - long form:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Yosys.Synthesis --to Yosys.Synthesis
+
+Synthesis alone - short form (identical):
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Yosys.Synthesis
+
+Check afterwards: runs/$TAG/06-yosys-synthesis/reports/stat.rpt
+
+
+--------------------------------------------------------------------------------
+ 4.3  FLOORPLAN + TAP/ENDCAP  (steps 13-19)
+--------------------------------------------------------------------------------
+Define die and core area, lay down the standard-cell row/site grid, hook up
+power nets, cut rows around macros, insert tap cells (prevent latch-up) and
+endcap cells (terminate the rows).
+
+Whole group:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.Floorplan --to OpenROAD.TapEndcapInsertion
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.Floorplan
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DumpRCValues
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.CheckMacroAntennaProperties
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.SetPowerConnections
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.ManualMacroPlacement
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CutRows
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.TapEndcapInsertion
+
+Do not skip Odb.SetPowerConnections. Without it, cells have no VPWR/VGND
+connections and LVS fails much later with a confusing error.
+
+
+--------------------------------------------------------------------------------
+ 4.4  POWER DISTRIBUTION NETWORK  (steps 20-23)
+--------------------------------------------------------------------------------
+Build the power grid - straps, rails, vias on the upper metals. This happens
+BEFORE I/O placement and BEFORE global placement, because the grid occupies
+routing resources that placement must be aware of.
+
+Whole group:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Odb.AddPDNObstructions --to Odb.AddRoutingObstructions
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.AddPDNObstructions
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.GeneratePDN
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.RemovePDNObstructions
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.AddRoutingObstructions
+
+
+--------------------------------------------------------------------------------
+ 4.5  I/O PIN PLACEMENT  (steps 24-27)
+--------------------------------------------------------------------------------
+Decide where top-level ports sit on the die edge. GlobalPlacementSkipIO does a
+throwaway placement first so the I/O placer can put pins near the logic that
+uses them.
+
+Whole group (runs whichever placer applies - see section 7):
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+
+# When DEFAULT (automatic) IO placement, use the below
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.IOPlacement
+
+# When CUSTOM IO placement (driven by IO_PIN_ORDER_CFG), use the below
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.CustomIOPlacement
+
+# When IO placement comes from a DEF template (FP_DEF_TEMPLATE), use the below
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.ApplyDEFTemplate
+
+Read section 7 before using these - the two placers self-select based on your
+config, and running "the wrong one" is a silent no-op, not an error.
+
+
+--------------------------------------------------------------------------------
+ 4.6  GLOBAL PLACEMENT + POST-GPL REPAIR  (steps 28-33)
+--------------------------------------------------------------------------------
+Spread cells across the core to minimise wirelength, check the power grid,
+take a timing snapshot, then let the resizer fix cells with illegal fanout or
+slew before legalisation.
+
+Whole group:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacement --to Odb.ManualGlobalPlacement
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.GlobalPlacement
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.WriteVerilogHeader
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.PowerGridViolations
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairDesignPostGPL
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.ManualGlobalPlacement
+
+Do NOT skip OpenROAD.RepairDesignPostGPL. It fixes max-slew and max-fanout
+violations while there is still room to add buffers.
+
+
+--------------------------------------------------------------------------------
+ 4.7  DETAILED PLACEMENT / LEGALISATION  (step 34)
+--------------------------------------------------------------------------------
+Snap every cell onto a legal site on a legal row with no overlaps.
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedPlacement
+
+
+--------------------------------------------------------------------------------
+ 4.8  CLOCK TREE SYNTHESIS + POST-CTS TIMING  (steps 35-38)
+--------------------------------------------------------------------------------
+Build a balanced buffer tree from the clock port to every flop, then re-run
+the resizer now that clock skew is real rather than ideal.
+
+Whole group:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CTS --to OpenROAD.STAMidPNR-2
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CTS
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR-1
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.ResizerTimingPostCTS
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR-2
+
+
+--------------------------------------------------------------------------------
+ 4.9  GLOBAL ROUTING + ANTENNA REPAIR  (steps 39-46)
+--------------------------------------------------------------------------------
+Assign each net to a coarse routing corridor, check for antenna violations
+(long metal collecting charge during fabrication and damaging gate oxide),
+insert diodes to fix them, and do the final timing repair now that wire
+parasitics are estimated.
+
+Whole group:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalRouting --to OpenROAD.STAMidPNR-3
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.GlobalRouting
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CheckAntennas
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairDesignPostGRT
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.DiodesOnPorts
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.HeuristicDiodeInsertion
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairAntennas
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.ResizerTimingPostGRT
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR-3
+
+This is the last chance to fix timing. After detailed routing the design is
+essentially frozen.
+
+
+--------------------------------------------------------------------------------
+ 4.10 DETAILED ROUTING  (steps 47-54)
+--------------------------------------------------------------------------------
+Commit every net to actual metal shapes and vias on real tracks. By far the
+longest step. The checkers that follow catch routing DRC violations,
+disconnected pins and pathological wirelength.
+
+Whole group:
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.DetailedRouting --to Checker.WireLength
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedRouting
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.RemoveRoutingObstructions
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CheckAntennas-1
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.TrDRC
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.ReportDisconnectedPins
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.DisconnectedPins
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.ReportWireLength
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.WireLength
+
+Checker.TrDRC (step 50) belongs HERE, right after routing - it reports the
+router's own DRC violations. It is NOT part of the signoff DRC in section 5.2.
+
+Note the suffix: the antenna check after detailed routing is
+OpenROAD.CheckAntennas-1 (step 49), a different invocation from
+OpenROAD.CheckAntennas (step 40).
+
+
+--------------------------------------------------------------------------------
+ 4.11 FILL INSERTION  (steps 55-56)
+--------------------------------------------------------------------------------
+Fill leftover gaps in the rows with filler and decap cells, so implant and
+well layers are continuous and the power rails stay quiet.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.FillInsertion --to Odb.CellFrequencyTables
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.FillInsertion
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.CellFrequencyTables
+
+
+--------------------------------------------------------------------------------
+ 4.12 PARASITIC EXTRACTION + POST-PnR STA  (steps 57-59)
+--------------------------------------------------------------------------------
+OpenRCX extracts real R and C from the routed geometry into SPEF files, then
+STA re-times the design against them. These are your real, signoff-grade
+timing numbers. IRDropReport estimates supply droop.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.RCX --to OpenROAD.IRDropReport
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RCX
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAPostPNR
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.IRDropReport
+
+Check afterwards: runs/$TAG/58-openroad-stapostpnr/reports/
+
+
+--------------------------------------------------------------------------------
+ 4.13 STREAM-OUT   <<< THIS PRODUCES THE GDSII >>>  (steps 60-64)
+--------------------------------------------------------------------------------
+Convert the routed database into GDSII. The Classic flow streams out TWICE,
+with two independent tools, specifically so they can be compared by the XOR
+check in section 5.1. Magic runs first, then KLayout.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Odb.CheckDesignAntennaProperties
+
+Individually, in the correct order:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Magic.StreamOut
+    python3 -m librelane --dockerized ./config.json --last-run --only KLayout.StreamOut
+    python3 -m librelane --dockerized ./config.json --last-run --only KLayout.Render
+    python3 -m librelane --dockerized ./config.json --last-run --only Magic.WriteLEF
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.CheckDesignAntennaProperties
+
+Output (DESIGN_NAME substituted for your top module):
+
+    runs/$TAG/60-magic-streamout/<DESIGN_NAME>.gds
+    runs/$TAG/61-klayout-streamout/<DESIGN_NAME>.gds
+    runs/$TAG/final/gds/<DESIGN_NAME>.gds          <- the deliverable
+
+
+================================================================================
+ 4A.  GATING VARIABLES (RUN_*) - STEPS THAT ARE OFF BY DEFAULT
+================================================================================
+
+A step that appears to "do nothing" can be in any of FOUR states. THREE of
+them produce a directory containing exactly config.json, runtime.txt,
+state_in.json and state_out.json and no tool log - so THEY ARE INDISTINGUISH-
+ABLE BY LISTING THE DIRECTORY. v2 of this document got this wrong; do not
+classify a step from `ls`.
+
+  MECHANISM A - GATED BY A RUN_* VARIABLE (flow level)
+      The flow checks a RUN_* config variable BEFORE constructing the step:
+          INFO  Gating variable for step 'X' set to 'False'- the step will be skipped.
+          INFO  Skipping step 'X'…
+      The step does NOT execute, consumes NO ordinal, and NO DIRECTORY is
+      created. This is the only one you can detect from the filesystem - by
+      the directory's absence.
+      (librelane/flows/sequential.py - `increment_ordinal = False`)
+
+  MECHANISM B - SELF-SKIP (step level, full table in 4A.3)
+      The step IS constructed and executed, then returns early from its own
+      run() because its input is missing or irrelevant, e.g.
+          INFO  IO_PIN_ORDER_CFG is set. Skipping 'OpenROAD.IOPlacement'…
+          INFO  'PDN_OBSTRUCTIONS' is not defined. Skipping 'Odb.AddPDNObstructions'…
+      Consumes an ordinal. Directory created. No tool log. No layout output.
+
+  MECHANISM C - RAN NORMALLY, BUT HAS NO SUBPROCESS   <<< NOT A SKIP >>>
+      Every Checker.* step, plus Misc.ReportManufacturability, is pure Python.
+      It reads metrics from the incoming state, decides pass/fail, and writes
+      metrics back out. It never launches a tool, so it never writes a *.log.
+      Consumes an ordinal. Directory created. No tool log. IT DID ITS JOB.
+
+      VERIFIED - Checker.MagicDRC with no tool log still carried metrics:
+          66-checker-magicdrc/state_out.json
+              magic__drc_error__count = 0
+              route__drc_errors       = 0
+      Treating this as "skipped" is the single easiest way to convince
+      yourself signoff did not run when it did.
+
+  MECHANISM D - COMPOSITE STEP (logs live one level down)
+      Some steps orchestrate sub-steps. The parent directory looks log-less;
+      the real work is in NUMBERED SUB-DIRECTORIES.
+
+      VERIFIED - OpenROAD.RepairAntennas:
+          42-openroad-repairantennas/
+              1-openroad-diodeinsertion/openroad-diodeinsertion.log
+              2-openroad-checkantennas/
+              config.json  runtime.txt  state_in.json  state_out.json
+
+HOW TO ACTUALLY TELL WHAT HAPPENED - read the log, not the directory:
+
+    # was it gated? (no directory at all)
+    grep "Gating variable" runs/$TAG/flow.log
+
+    # did it self-skip, and why?
+    grep -iE "skipping '<StepID>'|Returning state unaltered" runs/$TAG/flow.log
+
+    # did it really run? (any of these is proof)
+    ls runs/$TAG/NN-*/{*.log,COMMANDS} 2>/dev/null     # subprocess step
+    ls -d runs/$TAG/NN-*/[0-9]-*/                       # composite step
+    python3 -c "import json;print(json.load(open('runs/$TAG/NN-.../state_out.json'))['metrics'])"
+
+
+--------------------------------------------------------------------------------
+ 4A.1  THE COMPLETE GATING TABLE (Classic / VHDLClassic, v3.0.6)
+--------------------------------------------------------------------------------
+Read straight from `Classic.gating_config_vars`. A step is gated off if ANY of
+its listed variables is false.
+
+    Step ID                            Gating variable(s)             Default
+    ---------------------------------  -----------------------------  -------
+    Verilator.Lint                     RUN_LINTER                     True
+    Checker.LintErrors                 RUN_LINTER                     True
+    Checker.LintWarnings               RUN_LINTER                     True
+    Checker.LintTimingConstructs       RUN_LINTER                     True
+    OpenROAD.TapEndcapInsertion        RUN_TAP_ENDCAP_INSERTION       True
+    OpenROAD.RepairDesignPostGPL       RUN_POST_GPL_DESIGN_REPAIR     True
+    OpenROAD.CTS                       RUN_CTS                        True
+    OpenROAD.ResizerTimingPostCTS      RUN_POST_CTS_RESIZER_TIMING    True
+    OpenROAD.RepairDesignPostGRT       RUN_POST_GRT_DESIGN_REPAIR     False  <<
+    Odb.HeuristicDiodeInsertion        RUN_HEURISTIC_DIODE_INSERTION  False  <<
+    OpenROAD.RepairAntennas            RUN_ANTENNA_REPAIR             True
+    OpenROAD.ResizerTimingPostGRT      RUN_POST_GRT_RESIZER_TIMING    False  <<
+    OpenROAD.DetailedRouting           RUN_DRT                        True
+    Checker.TrDRC                      RUN_DRT                        True
+    OpenROAD.FillInsertion             RUN_FILL_INSERTION             True
+    OpenROAD.RCX                       RUN_SPEF_EXTRACTION            True
+    OpenROAD.STAPostPNR                RUN_MCSTA                      True
+    OpenROAD.IRDropReport              RUN_IRDROP_REPORT              True
+    Magic.StreamOut                    RUN_MAGIC_STREAMOUT            True
+    KLayout.StreamOut                  RUN_KLAYOUT_STREAMOUT          True
+    Magic.WriteLEF                     RUN_MAGIC_WRITE_LEF            True
+    Magic.DRC                          RUN_MAGIC_DRC                  True
+    Checker.MagicDRC                   RUN_MAGIC_DRC                  True
+    KLayout.DRC                        RUN_KLAYOUT_DRC                True
+    Checker.KLayoutDRC                 RUN_KLAYOUT_DRC                True
+    KLayout.XOR                        RUN_KLAYOUT_XOR +              True
+                                       RUN_MAGIC_STREAMOUT +
+                                       RUN_KLAYOUT_STREAMOUT
+    Checker.XOR                        (same three as KLayout.XOR)    True
+    Netgen.LVS                         RUN_LVS                        True
+    Checker.LVS                        RUN_LVS                        True
+    Yosys.EQY                          RUN_EQY                        False  <<
+
+Dump the resolved values for YOUR design at any time:
+
+    python3 -c "import json;r=json.load(open('runs/$TAG/resolved.json'));[print(k,'=',r[k]) for k in sorted(r) if k.startswith('RUN_')]"
+
+
+--------------------------------------------------------------------------------
+ 4A.2  THE FOUR STEPS THAT ARE OFF BY DEFAULT
+--------------------------------------------------------------------------------
+In a stock Classic run these four NEVER execute and produce NO directory:
+
+    OpenROAD.RepairDesignPostGRT     RUN_POST_GRT_DESIGN_REPAIR = False
+    Odb.HeuristicDiodeInsertion      RUN_HEURISTIC_DIODE_INSERTION = False
+    OpenROAD.ResizerTimingPostGRT    RUN_POST_GRT_RESIZER_TIMING = False
+    Yosys.EQY                        RUN_EQY = False
+
+The two post-GRT ones are described by upstream, verbatim, as:
+
+    "This is experimental and may result in hangs and/or extended run times."
+
+That is the reason they ship disabled. v1 of this document told you not to
+skip them; that was wrong - you cannot "not skip" a step that is off by
+default, and turning them on is an explicit, risk-accepting choice.
+
+To turn any of them on for a single run:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+        -c 'RUN_POST_GRT_DESIGN_REPAIR=true' \
+        -c 'RUN_POST_GRT_RESIZER_TIMING=true' \
+        -c 'RUN_EQY=true'
+
+Or set them permanently in config.json.
+
+CONSEQUENCE FOR --from / --to: naming a gated step is NOT an error. The range
+still runs; the gated step is simply skipped inside it. Verified:
+
+    --from Yosys.EQY --to Misc.ReportManufacturability
+
+completes normally, but Yosys.EQY itself does not run and writes no
+equivalence result. If you actually want the equivalence check, set
+RUN_EQY=true first.
+
+Note RUN_HEURISTIC_DIODE_INSERTION is additionally forced by LibreLane's own
+config resolution logic (librelane/config/config.py) depending on the diode
+insertion strategy in use, so its effective value can differ from the raw
+default.
+
+
+--------------------------------------------------------------------------------
+ 4A.3  COMPLETE SELF-SKIP TABLE (MECHANISM B) - ALL VERIFIED
+--------------------------------------------------------------------------------
+Every one of these was observed skipping in the rca run of section 17. Each
+creates a directory and consumes an ordinal, but does no work. The message
+column is the exact string emitted to flow.log, so you can grep for it.
+
+  Step ID                          Skips when…            Log message
+  -------------------------------  ---------------------  ------------------------
+  OpenROAD.CheckMacroInstances     no macros              "No macros found, skipping
+                                                           instance check…"
+  Odb.CheckMacroAntennaProperties  no macro cells         "No cells provided,
+                                                           skipping…"
+  Odb.ManualMacroPlacement         no macro instances     "No instances found,
+                                                           skipping…"
+  Odb.AddPDNObstructions           PDN_OBSTRUCTIONS       "'PDN_OBSTRUCTIONS' is not
+                                   not defined             defined. Skipping…"
+  Odb.RemovePDNObstructions        same                   same
+  Odb.AddRoutingObstructions       ROUTING_OBSTRUCTIONS   "'ROUTING_OBSTRUCTIONS' is
+                                   not defined             not defined. Skipping…"
+  Odb.RemoveRoutingObstructions    same                   same
+  OpenROAD.GlobalPlacementSkipIO   IO_PIN_ORDER_CFG or    "I/O pins to be placed from
+                                   FP_DEF_TEMPLATE set     …. Returning state
+                                                           unaltered…"
+  OpenROAD.IOPlacement             IO_PIN_ORDER_CFG or    "IO_PIN_ORDER_CFG is set.
+                                   FP_DEF_TEMPLATE set     Skipping…"
+  Odb.CustomIOPlacement            IO_PIN_ORDER_CFG null  "No custom I/O placement
+                                                           file configured, skipping…"
+  Odb.ApplyDEFTemplate             FP_DEF_TEMPLATE null   "No DEF template provided,
+                                                           skipping…"
+  Odb.ManualGlobalPlacement        MANUAL_GLOBAL_         "'MANUAL_GLOBAL_PLACEMENTS'
+                                   PLACEMENTS not set      not set. Skipping…"
+  Odb.DiodesOnPorts                DIODE_ON_PORTS='none'  "'DIODE_ON_PORTS' is set to
+                                   (the DEFAULT)           'none': skipping…"
+  OpenROAD.CTS                     CLOCK_PORT /           "No CLOCK_NET (or
+                                   CLOCK_NET null          CLOCK_PORT) specified. CTS
+                                                           cannot be performed.
+                                                           Returning state unaltered…"
+
+IMPORTANT - Odb.DiodesOnPorts IS A THIRD MECHANISM AGAIN. It is not gated by a
+RUN_* variable and it is not conditional on missing input: it is switched off
+by the ordinary config value DIODE_ON_PORTS, whose default is the string
+'none'. To enable it:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+        -c 'DIODE_ON_PORTS="both"'
+
+IMPORTANT - OpenROAD.CTS is NOT gated when CLOCK_PORT is null. RUN_CTS is
+still True, so the step runs, finds no clock, and returns the state unaltered.
+For a purely combinational design this is correct and expected. Do not
+"fix" it.
+
+
+================================================================================
+ 5.  SIGNOFF / VERIFICATION
+================================================================================
+
+Everything below runs on the GDSII. None of it changes the layout; it only
+tells you whether the layout is correct and manufacturable.
+
+
+--------------------------------------------------------------------------------
+ 5.1  XOR - LAYOUT COMPARISON  (steps 65-66)
+--------------------------------------------------------------------------------
+Geometrically XOR the Magic GDS against the KLayout GDS. Any shape present in
+one but not the other means the two tools disagree about your layout. A clean
+run produces an empty XOR.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to Checker.XOR
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only KLayout.XOR
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.XOR
+
+
+--------------------------------------------------------------------------------
+ 5.2  DRC - DESIGN RULE CHECK  (steps 67-70)
+--------------------------------------------------------------------------------
+Verify the layout obeys the foundry's geometric rules (spacing, width,
+enclosure, density). Run with both Magic and KLayout; each catches things the
+other misses. Two separate checkers then gate the flow.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Magic.DRC
+    python3 -m librelane --dockerized ./config.json --last-run --only KLayout.DRC
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.MagicDRC
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.KLayoutDRC
+
+There are TWO DRC checkers - Checker.MagicDRC (69) and Checker.KLayoutDRC
+(70). Running only one leaves half the DRC results ungated.
+
+
+--------------------------------------------------------------------------------
+ 5.3  LVS - LAYOUT VS SCHEMATIC  (steps 71-74)
+--------------------------------------------------------------------------------
+Magic extracts a SPICE netlist from the actual layout geometry, and Netgen
+compares it against the synthesised netlist. This proves the thing you are
+about to fabricate is electrically the circuit you designed.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+
+Individually, in order:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Magic.SpiceExtraction
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.IllegalOverlap
+    python3 -m librelane --dockerized ./config.json --last-run --only Netgen.LVS
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.LVS
+
+Checker.IllegalOverlap (72) belongs to this group - it uses the extraction
+result to find cells illegally overlapping. It is not an antenna check.
+
+Netgen.LVS cannot run before Magic.SpiceExtraction; it consumes the SPICE
+netlist that step produces.
+
+
+--------------------------------------------------------------------------------
+ 5.4  FINAL CHECKERS  (steps 75-80)
+--------------------------------------------------------------------------------
+Formal equivalence between RTL and final netlist, then the timing checkers
+that fail the flow on setup, hold, slew and capacitance violations, then a
+manufacturability summary.
+
+    python3 -m librelane --dockerized ./config.json --last-run --from Yosys.EQY --to Misc.ReportManufacturability
+
+Individually:
+
+    python3 -m librelane --dockerized ./config.json --last-run --only Yosys.EQY
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.SetupViolations
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.HoldViolations
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.MaxSlewViolations
+    python3 -m librelane --dockerized ./config.json --last-run --only Checker.MaxCapViolations
+    python3 -m librelane --dockerized ./config.json --last-run --only Misc.ReportManufacturability
+
+Final summary:
+    runs/$TAG/final/metrics.csv
+    runs/$TAG/final/metrics.json
+    runs/$TAG/80-misc-reportmanufacturability/
+
+
+================================================================================
+ 6.  OPENING RESULTS IN A GUI
+================================================================================
+
+These use --flow, NOT --from/--to. They are separate one-step flows that load
+the latest state and open a viewer. They do not modify the design.
+
+OpenROAD - best for placement, routing, PDN and timing debug:
+
+    python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD
+
+KLayout - best for inspecting the final GDSII:
+
+    python3 -m librelane --dockerized ./config.json --last-run --flow OpenInKLayout
+
+Magic - best for extraction and DRC debug:
+
+    python3 -m librelane --dockerized ./config.json --last-run --flow OpenInMagic
+
+Flow names are case-insensitive, so `--flow openinklayout` works identically.
+
+To inspect a SPECIFIC earlier step rather than the latest state, point at that
+step's state_out.json with -i / --with-initial-state:
+
+    python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD \
+        -i ./runs/$TAG/13-openroad-floorplan/state_out.json
+
+If GUI windows do not appear under --dockerized:
+
+    xhost +local:docker
+
+
+================================================================================
+ 7.  MANUAL vs DEFAULT: WHERE YOU ACTUALLY HAVE A CHOICE
+================================================================================
+
+These are the points in the Classic flow where LibreLane offers a "do it
+automatically" step and a "do it the way I said" step. In every case BOTH
+steps are present in the flow and each one decides at runtime whether to run
+or skip itself, based on your config.json. Running the inapplicable one is a
+harmless no-op, not an error - which is exactly why it is easy to be confused
+about which one did the work.
+
+
+--------------------------------------------------------------------------------
+ 7.1  I/O PIN PLACEMENT   (steps 25 / 26 / 27)
+--------------------------------------------------------------------------------
+Relevant config variables:  IO_PIN_ORDER_CFG, FP_DEF_TEMPLATE
+
+  Config state                         Step that actually does the work
+  -----------------------------------  ----------------------------------------
+  IO_PIN_ORDER_CFG = null (default)    OpenROAD.IOPlacement       (step 25)
+  IO_PIN_ORDER_CFG = "<path>"          Odb.CustomIOPlacement      (step 26)
+  FP_DEF_TEMPLATE  = "<path>"          Odb.ApplyDEFTemplate       (step 27)
+
+Exact self-skip logic in v3.0.6 - note there are FOUR steps involved, not two
+(v2 of this document listed only the middle two):
+
+  * OpenROAD.GlobalPlacementSkipIO (24) returns the state UNALTERED if either
+    FP_DEF_TEMPLATE or IO_PIN_ORDER_CFG is set:
+        "I/O pins to be placed from <cfg>. Returning state unaltered…"
+    Its whole purpose is a throwaway placement so the AUTOMATIC placer can put
+    pins near the logic that uses them. If you are placing pins yourself that
+    is pointless, so it does nothing. VERIFIED: runtime 0.008s, state_in and
+    state_out byte-identical.
+  * OpenROAD.IOPlacement (25) skips itself if IO_PIN_ORDER_CFG is not null,
+    and also if FP_DEF_TEMPLATE is not null.
+  * Odb.CustomIOPlacement (26) skips itself if IO_PIN_ORDER_CFG is null,
+    logging "No custom I/O placement file configured, skipping…".
+  * Odb.ApplyDEFTemplate (27) skips itself if FP_DEF_TEMPLATE is null,
+    logging "No DEF template provided, skipping…".
+
+So with a custom pin_order.cfg, THREE of these four do nothing and only
+Odb.CustomIOPlacement produces a DEF. That is correct behaviour.
+
+# When default IO placement use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.IOPlacement --to OpenROAD.IOPlacement
+
+# When custom IO placement use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --from Odb.CustomIOPlacement --to Odb.CustomIOPlacement
+
+(Short forms, identical behaviour:)
+
+    python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.IOPlacement
+    python3 -m librelane --dockerized ./config.json --last-run --only Odb.CustomIOPlacement
+
+To switch from default to custom, you must edit config.json - there is no CLI
+flag for it. Either edit the file, or override for one run only:
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+        -c 'IO_PIN_ORDER_CFG="dir::pin_order.cfg"'
+
+Note IO_PIN_ORDER_CFG replaces the OpenLane-era name FP_PIN_ORDER_CFG.
+FP_PIN_ORDER_CFG is still accepted as a deprecated alias in config.json, but
+it is NOT accepted by `-c`/--override-config, which requires current names.
+Use IO_PIN_ORDER_CFG.
+
+Pin order config file syntax (per the official reference):
+
+    #N / #S / #E / #W       start the north / south / east / west section
+    <regex>                 a pin name as a regular expression; regex
+                            metacharacters must be escaped, e.g. x\[0\]
+    @min_distance=<um>      minimum spacing between pins; global or per-section
+    @bus_major              sort by bus name then bit number  (default)
+    @bit_major              sort by bit number then bus name
+    $<n>                    insert n virtual/placeholder pins
+
+    Example:
+        #N
+        @min_distance=0.1
+        x.*
+
+        #S
+        $1
+        rst
+
+        #E
+        clk
+
+        #W
+        p
+        y
+
+
+--------------------------------------------------------------------------------
+ 7.2  MACRO PLACEMENT   (step 17 in Classic)
+--------------------------------------------------------------------------------
+Relevant config variables:  MACROS (current, preferred)
+                            MACRO_PLACEMENT_CFG (accepted, but the step logs
+                            "Using 'MACRO_PLACEMENT_CFG' is deprecated. It is
+                            recommended to use the new 'MACROS' configuration
+                            variable.")
+
+Odb.ManualMacroPlacement is the ONE step for both cases - there is no separate
+"auto" step ID. It skips itself when no macro instances are configured.
+
+# When macro placement is automatic / there are no macros - nothing extra to
+# run. The step self-skips.
+
+# When macro locations are set manually (via MACROS, or the deprecated
+# MACRO_PLACEMENT_CFG), use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ManualMacroPlacement
+
+MACRO_PLACEMENT_CFG file format: line-break delimited, one instance per line,
+    instance_name  X_pos  Y_pos  Orientation
+Prefer MACROS instead for new designs.
+
+
+--------------------------------------------------------------------------------
+ 7.3  STANDARD-CELL PLACEMENT OVERRIDE   (step 33 in Classic)
+--------------------------------------------------------------------------------
+Relevant config variable:  MANUAL_GLOBAL_PLACEMENTS
+
+The step skips itself if MANUAL_GLOBAL_PLACEMENTS is null, logging
+"'MANUAL_GLOBAL_PLACEMENTS' not set. Skipping…".
+
+# When default placement - global placement decides everything; nothing extra
+# to run, the step self-skips.
+
+# When manual instance locations are configured, use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ManualGlobalPlacement
+
+Per its own documentation, for a custom design with only a few cells this step
+can be used in place of global placement entirely.
+
+
+--------------------------------------------------------------------------------
+ 7.4  ANTENNA DIODE INSERTION   (steps 42-44)
+--------------------------------------------------------------------------------
+Three distinct strategies, all present in the Classic flow, each gated by
+config:
+
+# Unconditional diodes on every design port
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.DiodesOnPorts
+
+# Heuristic insertion based on estimated net length
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.HeuristicDiodeInsertion
+
+# OpenROAD's own repair pass, driven by real antenna violations
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairAntennas
+
+
+--------------------------------------------------------------------------------
+ 7.5  OVERRIDING ANY CONFIG VARIABLE FOR ONE RUN
+--------------------------------------------------------------------------------
+-c / --override-config takes KEY=VALUE where VALUE must be valid JSON, and KEY
+must be the current (non-deprecated) name. Repeatable.
+
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+        -c 'FP_CORE_UTIL=40' \
+        -c 'PL_TARGET_DENSITY=0.6' \
+        -c 'CLOCK_PERIOD=10'
+
+Strings need JSON quoting, which means quoting the whole argument in bash:
+
+        -c 'DESIGN_NAME="full_adder"'
+
+
+================================================================================
+ 8.  RUN CONTROL FLAGS (full list, v3.0.6)
+================================================================================
+
+SUBCOMMANDS (mutually exclusive with each other)
+    --version                     print version and exit
+    --smoke-test                  run a throwaway smoke-test flow
+    --run-example TEXT            copy a bundled example here and run it
+
+PDK OPTIONS
+    -p, --pdk TEXT                process design kit          [default: sky130A]
+    -s, --scl TEXT                standard cell library; PDK default if unset
+        --pad TEXT                standard pad library; PDK default if unset
+        --pdk-root DIRECTORY      Ciel PDK root. Can also come from $PDK_ROOT
+        --volare-pdk / --ciel-pdk use Ciel to install/enable the PDK [default]
+        --manual-pdk              use a custom PDK version instead
+
+SEQUENTIAL FLOW CONTROL
+    -F, --from TEXT               start at this step id
+    -T, --to TEXT                 stop at this step id
+        --only TEXT               shorthand for --from X --to X; overrides both
+    -S, --skip TEXT               skip these steps within the range
+
+RUN OPTIONS (mutually exclusive - never pass both)
+        --run-tag TEXT            name this run / target an existing named run
+        --last-run                use the most recent run as the tag
+
+FLOW CONFIGURATION
+    -f, --flow TEXT               built-in flow to use (case-insensitive)
+    -c, --override-config KEY=VAL override one config variable, JSON value.
+                                  Repeatable. Deprecated key names rejected.
+
+OTHER
+    -e, --initial-state-element-override DESIGN_FORMAT_ID=PATH
+    -i, --with-initial-state FILE start from a specific state JSON. Repeatable;
+                                  later files override earlier ones. Defaults
+                                  to the latest state_out.json in the run dir.
+    -j, --jobs INTEGER            max threads/processes            [default: 2]
+        --condensed / --full      terse vs full subprocess logs       [full]
+        --show-progress-bar / --hide-progress-bar                    [show]
+        --log-level LEVEL         ALL|DEBUG|SUBPROCESS|VERBOSE|INFO|
+                                  WARNING|ERROR|CRITICAL      [SUBPROCESS]
+        --reproducible TEXT       build a reproducible for this step, then abort
+        --overwrite               wipe and reuse an existing run tag
+        --design-dir DIRECTORY    top-level design dir for relative paths
+        --save-views-to DIRECTORY copy final views out to this directory
+        --ef-save-views-to DIRECTORY   same, in Efabless/Caravel layout
+        --help
+
+CONTAINERIZATION (must come before --dockerized; see section 1)
+    -m, --docker-mount / --container-mount TEXT
+        --docker-tty / --container-tty  |  --docker-no-tty / --container-no-tty
+        --dockerized / --containerized
+
+Useful combinations:
+
+    # quiet CI-style run
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+        --condensed --hide-progress-bar --log-level ERROR
+
+    # use more cores
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" -j 8
+
+    # explicit PDK and PDK root
+    python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+        -p sky130A -s sky130_fd_sc_hd --pdk-root /home/zakir/.ciel
+
+
+================================================================================
+ 9.  RUNNING / RE-RUNNING A SINGLE STEP OUTSIDE A FLOW
+================================================================================
+
+The step-level CLI is a SEPARATE entry point:
+
+    python3 -m librelane.steps --help
+
+Three subcommands: run, eject, create-reproducible.
+
+9.1  Re-run one step from its own saved config + state
+     (each step directory under runs/$TAG/ contains both):
+
+    python3 -m librelane.steps run \
+        -c ./runs/$TAG/47-openroad-detailedrouting/config.json \
+        -i ./runs/$TAG/46-openroad-stamidpnr-3/state_out.json \
+        -o ./step_rerun
+
+     --id is only needed if the config file lacks .meta.step.
+
+9.2  Package a step as a filesystem-independent reproducible, for bug reports:
+
+    python3 -m librelane.steps create-reproducible \
+        -d ./runs/$TAG/47-openroad-detailedrouting \
+        -o ./repro
+
+     Or straight from a flow run, which builds the reproducible then aborts:
+
+    python3 -m librelane --dockerized ./config.json --last-run \
+        --reproducible OpenROAD.DetailedRouting
+
+9.3  "Eject" a step into a plain shell script that calls the underlying tool
+     directly - for reporting issues upstream to OpenROAD/Magic/KLayout:
+
+    python3 -m librelane.steps eject \
+        -c ./runs/$TAG/47-openroad-detailedrouting/config.json \
+        -i ./runs/$TAG/46-openroad-stamidpnr-3/state_out.json \
+        -o ./run.sh
+
+
+================================================================================
+ 10.  OUTPUT DIRECTORY LAYOUT
+================================================================================
+
+    runs/$TAG/
+        <NN>-<step-id-lowercased>/       one per executed step, NN = ordinal
+            config.json                  the exact config that step saw
+            state_out.json               the design state it produced
+            reports/                     its reports
+            *.log                        tool output
+        final/                           consolidated deliverables
+            gds/        def/    lef/     odb/    nl/     pnl/
+            klayout_gds/  mag/  mag_gds/ spice/  spef/   sdf/
+            sdc/        lib/    json_h/  vh/     render/
+            metrics.csv
+            metrics.json
+        error.log / warning.log / flow.log (when produced)
+
+STEP DIRECTORY NUMBERS DO **NOT** ALWAYS MATCH SECTION 12 (v1 said they did)
+
+The ordinal counter increments ONLY for steps that actually execute. Gated
+steps (section 4A) consume no ordinal and create no directory. So:
+
+    directory ordinal  =  section-12 number
+                          MINUS the number of gated steps before it
+
+With the four stock-default gated steps, a clean Classic run produces 76
+directories numbered 01-76, not 80. Verified mapping from the mux8x1 run:
+
+    Section 12 no.  Step                            Directory
+    --------------  ------------------------------  ---------------------------
+     1-40           Verilator.Lint … CheckAntennas   01-40   (identical)
+     41             OpenROAD.RepairDesignPostGRT     (gated - NO DIRECTORY)
+     42             Odb.DiodesOnPorts                41
+     43             Odb.HeuristicDiodeInsertion      (gated - NO DIRECTORY)
+     44             OpenROAD.RepairAntennas          42
+     45             OpenROAD.ResizerTimingPostGRT    (gated - NO DIRECTORY)
+     46             OpenROAD.STAMidPNR-3             43
+     47             OpenROAD.DetailedRouting         44
+     48-74          Odb.RemoveRoutingObstructions …  45-71   (offset -3)
+                    Checker.LVS
+     75             Yosys.EQY                        (gated - NO DIRECTORY)
+     76-80          Checker.SetupViolations …        72-76   (offset -4)
+                    Misc.ReportManufacturability
+
+So in a stock run it is 06-yosys-synthesis and 21-openroad-generatepdn as v1
+said, but 58-klayout-streamout, NOT 61-klayout-streamout.
+
+NEVER hardcode these numbers in a script. Find the directory by name:
+
+    ls -d runs/$TAG/*-klayout-streamout
+    ls -d runs/$TAG/*-yosys-synthesis
+
+Two further things that shift the numbering:
+  * Re-running a range APPENDS new numbered directories; it does not overwrite
+    the old ones. Running the same range twice gives you two copies.
+  * Any invocation that restarts from step 1 (see section 4.2) duplicates the
+    early steps and shifts everything after them.
+
+Getting at the GDSII:
+
+    ls runs/$TAG/final/gds/
+    klayout runs/$TAG/final/gds/<DESIGN_NAME>.gds
+
+If no --run-tag is given, $TAG is auto-generated as RUN_YYYY-MM-DD_HH-MM-SS
+in local time.
+
+
+================================================================================
+ 11.  RULES YOU MUST NOT BREAK
+================================================================================
+
+(1) ORDER IS NOT OPTIONAL, AND RUNNING OUT OF ORDER DOES NOT ERROR.
+
+    --last-run picks the run directory with the newest modification time.
+    Within that directory, if you do not pass -i, the initial state is the
+    NEWEST state_out.json by modification time, found recursively - not the
+    state that logically precedes your --from step.
+    (librelane/flows/flow.py, librelane/common/misc.py: get_latest_file)
+
+    Consequence: if you run I/O placement before PDN, LibreLane will not
+    complain. It will feed the wrong state forward and you get a broken or
+    silently degraded design. Follow section 12's numbering.
+
+(2) --run-tag AND --last-run ARE MUTUALLY EXCLUSIVE.
+
+    Passing both raises "tag and last_run cannot be used simultaneously."
+    Pick one convention per session and keep to it.
+
+(3) --dockerized MUST COME FIRST.  See section 1 for the exact rule.
+
+(4) DO NOT SKIP THE REPAIR AND RESIZER STEPS THAT ARE ON BY DEFAULT.
+    [CORRECTED IN v2 - v1 got this wrong.]
+
+    ON BY DEFAULT - never exclude these from your ranges:
+        OpenROAD.RepairDesignPostGPL   (32)  RUN_POST_GPL_DESIGN_REPAIR=True
+        OpenROAD.ResizerTimingPostCTS  (37)  RUN_POST_CTS_RESIZER_TIMING=True
+        OpenROAD.RepairAntennas        (44)  RUN_ANTENNA_REPAIR=True
+
+    OFF BY DEFAULT - v1 wrongly listed these as must-not-skip. You cannot
+    "not skip" them; they never run unless you explicitly enable them, and
+    upstream calls them experimental (see section 4A.2):
+        OpenROAD.RepairDesignPostGRT   (41)  RUN_POST_GRT_DESIGN_REPAIR=False
+        OpenROAD.ResizerTimingPostGRT  (45)  RUN_POST_GRT_RESIZER_TIMING=False
+
+    The underlying warning still stands: a step list that jumps straight from
+    GlobalPlacement to DetailedPlacement to CTS to routing will complete and
+    produce a GDSII with unfixed slew, fanout and antenna violations. Use the
+    section 4 ranges rather than cherry-picking single steps.
+
+(5) STEPS THAT APPEAR MORE THAN ONCE GET A NUMERIC SUFFIX.
+
+    OpenROAD.STAMidPNR, -1, -2, -3 are four separate invocations at steps 31,
+    36, 38, 46. OpenROAD.CheckAntennas and CheckAntennas-1 are steps 40 and
+    49. You must use the exact suffixed ID to target a specific one.
+
+(6) CHECKERS ARE NOT ANALYSES.
+
+    Checker.* steps compute nothing. They read a report produced by an earlier
+    step and decide whether to abort the flow. Checker.XOR without KLayout.XOR,
+    or Checker.LVS without Netgen.LVS, has nothing to read.
+
+(7) --from A --to B IS A RANGE, NOT A PAIR.
+
+    "--from Magic.DRC --to Checker.KLayoutDRC" runs steps 67, 68, 69 AND 70.
+
+(8) --only X IS THE SHORTHAND FOR --from X --to X, AND OVERRIDES BOTH.
+
+(9) SELF-SKIPPING STEPS ARE NOT ERRORS.
+
+    Several steps decide at runtime to do nothing (section 7). Read the log
+    line - "skipping <id>…" - rather than assuming the step did the work.
+
+(10) DEPRECATED CONFIG NAMES ARE ACCEPTED IN config.json, NOT IN -c.
+
+     Examples of renames in this version:
+         FP_PIN_ORDER_CFG          -> IO_PIN_ORDER_CFG
+         GRT_OBS                   -> ROUTING_OBSTRUCTIONS
+         QUIT_ON_UNMATCHED_IO      -> ERRORS_ON_UNMATCHED_IO
+         MACRO_PLACEMENT_CFG       -> MACROS
+     Prefer current names everywhere.
+
+(11) --to WITHOUT --from ALWAYS STARTS AT STEP 1.  [NEW IN v2]
+
+     `--run-tag "$TAG" --to X` on an EXISTING run re-runs everything from
+     step 1 into that same run directory, duplicating the early steps. It does
+     not resume. Use it exactly once, to create the run. Every stage after
+     that must be `--last-run --from A --to B`. See section 4.2.
+
+(12) --docker-no-tty IS FOR NON-INTERACTIVE SHELLS ONLY.  [NEW IN v2]
+
+     Do NOT add it to commands you type by hand - the plain --dockerized form
+     used throughout sections 4 and 5 is correct in any terminal, confirmed by
+     the controlled test in section 1.
+
+     Add it only where stdin is not a terminal (scripts, pipelines, cron, CI,
+     ssh without -t, agent harnesses). There, without it, dockerized runs fail
+     instantly with "cannot attach stdin to a TTY-enabled container".
+
+(13) GATED STEPS ARE NOT THE SAME AS SELF-SKIPPING STEPS.  [NEW IN v2]
+
+     See section 4A. Gated steps create no directory and consume no ordinal;
+     self-skipping steps create a directory with no tool output. Four Classic
+     steps are gated off by default.
+
+
+================================================================================
+ 12.  COMPLETE ORDERED STEP LISTS
+================================================================================
+
+Regenerate any of these for your own installed version at any time:
+
+    python3 -c "from librelane.flows import Flow; [print(i, s.id) for i, s in enumerate(Flow.factory.get('Classic').Steps, 1)]"
+
+List the available flow names:
+
+    python3 -c "from librelane.flows import Flow; print('\n'.join(sorted(Flow.factory.list())))"
+
+List every registered step ID:
+
+    python3 -c "from librelane.steps import Step; print('\n'.join(sorted(Step.factory.list())))"
+
+
+--------------------------------------------------------------------------------
+ 12.1  CLASSIC FLOW - 80 STEPS  (the default)
+--------------------------------------------------------------------------------
+  1  Verilator.Lint                    41  OpenROAD.RepairDesignPostGRT
+  2  Checker.LintTimingConstructs      42  Odb.DiodesOnPorts
+  3  Checker.LintErrors                43  Odb.HeuristicDiodeInsertion
+  4  Checker.LintWarnings              44  OpenROAD.RepairAntennas
+  5  Yosys.JsonHeader                  45  OpenROAD.ResizerTimingPostGRT
+  6  Yosys.Synthesis                   46  OpenROAD.STAMidPNR-3
+  7  Checker.YosysUnmappedCells        47  OpenROAD.DetailedRouting
+  8  Checker.YosysSynthChecks          48  Odb.RemoveRoutingObstructions
+  9  Checker.NetlistAssignStatements   49  OpenROAD.CheckAntennas-1
+ 10  OpenROAD.CheckSDCFiles            50  Checker.TrDRC
+ 11  OpenROAD.CheckMacroInstances      51  Odb.ReportDisconnectedPins
+ 12  OpenROAD.STAPrePNR                52  Checker.DisconnectedPins
+ 13  OpenROAD.Floorplan                53  Odb.ReportWireLength
+ 14  OpenROAD.DumpRCValues             54  Checker.WireLength
+ 15  Odb.CheckMacroAntennaProperties   55  OpenROAD.FillInsertion
+ 16  Odb.SetPowerConnections           56  Odb.CellFrequencyTables
+ 17  Odb.ManualMacroPlacement          57  OpenROAD.RCX
+ 18  OpenROAD.CutRows                  58  OpenROAD.STAPostPNR
+ 19  OpenROAD.TapEndcapInsertion       59  OpenROAD.IRDropReport
+ 20  Odb.AddPDNObstructions            60  Magic.StreamOut
+ 21  OpenROAD.GeneratePDN              61  KLayout.StreamOut
+ 22  Odb.RemovePDNObstructions         62  KLayout.Render
+ 23  Odb.AddRoutingObstructions        63  Magic.WriteLEF
+ 24  OpenROAD.GlobalPlacementSkipIO    64  Odb.CheckDesignAntennaProperties
+ 25  OpenROAD.IOPlacement              65  KLayout.XOR
+ 26  Odb.CustomIOPlacement             66  Checker.XOR
+ 27  Odb.ApplyDEFTemplate              67  Magic.DRC
+ 28  OpenROAD.GlobalPlacement          68  KLayout.DRC
+ 29  Odb.WriteVerilogHeader            69  Checker.MagicDRC
+ 30  Checker.PowerGridViolations       70  Checker.KLayoutDRC
+ 31  OpenROAD.STAMidPNR                71  Magic.SpiceExtraction
+ 32  OpenROAD.RepairDesignPostGPL      72  Checker.IllegalOverlap
+ 33  Odb.ManualGlobalPlacement         73  Netgen.LVS
+ 34  OpenROAD.DetailedPlacement        74  Checker.LVS
+ 35  OpenROAD.CTS                      75  Yosys.EQY
+ 36  OpenROAD.STAMidPNR-1              76  Checker.SetupViolations
+ 37  OpenROAD.ResizerTimingPostCTS     77  Checker.HoldViolations
+ 38  OpenROAD.STAMidPNR-2              78  Checker.MaxSlewViolations
+ 39  OpenROAD.GlobalRouting            79  Checker.MaxCapViolations
+ 40  OpenROAD.CheckAntennas            80  Misc.ReportManufacturability
+
+
+--------------------------------------------------------------------------------
+ 12.2  CHIP FLOW - 83 STEPS
+--------------------------------------------------------------------------------
+Differences from Classic: adds OpenROAD.PadRing (17), drops IOPlacement /
+CustomIOPlacement (pins come from the pad ring), adds KLayout.Antenna,
+Checker.KLayoutAntenna, KLayout.SealRing, KLayout.Filler, KLayout.Density,
+Checker.KLayoutDensity, and drops Magic.WriteLEF /
+Odb.CheckDesignAntennaProperties.
+
+  1  Verilator.Lint                    43  OpenROAD.RepairAntennas
+  2  Checker.LintTimingConstructs      44  OpenROAD.ResizerTimingPostGRT
+  3  Checker.LintErrors                45  OpenROAD.STAMidPNR-3
+  4  Checker.LintWarnings              46  OpenROAD.DetailedRouting
+  5  Yosys.JsonHeader                  47  Odb.RemoveRoutingObstructions
+  6  Yosys.Synthesis                   48  OpenROAD.CheckAntennas-1
+  7  Checker.YosysUnmappedCells        49  Checker.TrDRC
+  8  Checker.YosysSynthChecks          50  Odb.ReportDisconnectedPins
+  9  Checker.NetlistAssignStatements   51  Checker.DisconnectedPins
+ 10  OpenROAD.CheckSDCFiles            52  Odb.ReportWireLength
+ 11  OpenROAD.CheckMacroInstances      53  Checker.WireLength
+ 12  OpenROAD.STAPrePNR                54  OpenROAD.FillInsertion
+ 13  OpenROAD.Floorplan                55  Odb.CellFrequencyTables
+ 14  OpenROAD.DumpRCValues             56  OpenROAD.RCX
+ 15  Odb.CheckMacroAntennaProperties   57  OpenROAD.STAPostPNR
+ 16  Odb.SetPowerConnections           58  OpenROAD.IRDropReport
+ 17  OpenROAD.PadRing                  59  Magic.StreamOut
+ 18  Odb.ManualMacroPlacement          60  KLayout.StreamOut
+ 19  OpenROAD.CutRows                  61  KLayout.Render
+ 20  OpenROAD.TapEndcapInsertion       62  KLayout.XOR
+ 21  Odb.AddPDNObstructions            63  Checker.XOR
+ 22  OpenROAD.GeneratePDN              64  KLayout.Antenna
+ 23  Odb.RemovePDNObstructions         65  Checker.KLayoutAntenna
+ 24  Odb.AddRoutingObstructions        66  KLayout.SealRing
+ 25  OpenROAD.GlobalPlacementSkipIO    67  KLayout.Filler
+ 26  Odb.ApplyDEFTemplate              68  KLayout.Density
+ 27  OpenROAD.GlobalPlacement          69  Checker.KLayoutDensity
+ 28  Odb.WriteVerilogHeader            70  Magic.DRC
+ 29  Checker.PowerGridViolations       71  KLayout.DRC
+ 30  OpenROAD.STAMidPNR                72  Checker.MagicDRC
+ 31  OpenROAD.RepairDesignPostGPL      73  Checker.KLayoutDRC
+ 32  Odb.ManualGlobalPlacement         74  Magic.SpiceExtraction
+ 33  OpenROAD.DetailedPlacement        75  Checker.IllegalOverlap
+ 34  OpenROAD.CTS                      76  Netgen.LVS
+ 35  OpenROAD.STAMidPNR-1              77  Checker.LVS
+ 36  OpenROAD.ResizerTimingPostCTS     78  Yosys.EQY
+ 37  OpenROAD.STAMidPNR-2              79  Checker.SetupViolations
+ 38  OpenROAD.GlobalRouting            80  Checker.HoldViolations
+ 39  OpenROAD.CheckAntennas            81  Checker.MaxSlewViolations
+ 40  OpenROAD.RepairDesignPostGRT      82  Checker.MaxCapViolations
+ 41  Odb.DiodesOnPorts                 83  Misc.ReportManufacturability
+ 42  Odb.HeuristicDiodeInsertion
+
+
+--------------------------------------------------------------------------------
+ 12.3  VHDLCLASSIC FLOW - 72 STEPS
+--------------------------------------------------------------------------------
+Differences from Classic: starts at Yosys.VHDLSynthesis (no Verilator lint, no
+Yosys.JsonHeader), drops Odb.SetPowerConnections, Odb.WriteVerilogHeader and
+Yosys.EQY.
+
+  1  Yosys.VHDLSynthesis               37  OpenROAD.RepairAntennas
+  2  Checker.YosysUnmappedCells        38  OpenROAD.ResizerTimingPostGRT
+  3  Checker.YosysSynthChecks          39  OpenROAD.STAMidPNR-3
+  4  Checker.NetlistAssignStatements   40  OpenROAD.DetailedRouting
+  5  OpenROAD.CheckSDCFiles            41  Odb.RemoveRoutingObstructions
+  6  OpenROAD.CheckMacroInstances      42  OpenROAD.CheckAntennas-1
+  7  OpenROAD.STAPrePNR                43  Checker.TrDRC
+  8  OpenROAD.Floorplan                44  Odb.ReportDisconnectedPins
+  9  OpenROAD.DumpRCValues             45  Checker.DisconnectedPins
+ 10  Odb.CheckMacroAntennaProperties   46  Odb.ReportWireLength
+ 11  Odb.ManualMacroPlacement          47  Checker.WireLength
+ 12  OpenROAD.CutRows                  48  OpenROAD.FillInsertion
+ 13  OpenROAD.TapEndcapInsertion       49  Odb.CellFrequencyTables
+ 14  Odb.AddPDNObstructions            50  OpenROAD.RCX
+ 15  OpenROAD.GeneratePDN              51  OpenROAD.STAPostPNR
+ 16  Odb.RemovePDNObstructions         52  OpenROAD.IRDropReport
+ 17  Odb.AddRoutingObstructions        53  Magic.StreamOut
+ 18  OpenROAD.GlobalPlacementSkipIO    54  KLayout.StreamOut
+ 19  OpenROAD.IOPlacement              55  KLayout.Render
+ 20  Odb.CustomIOPlacement             56  Magic.WriteLEF
+ 21  Odb.ApplyDEFTemplate              57  Odb.CheckDesignAntennaProperties
+ 22  OpenROAD.GlobalPlacement          58  KLayout.XOR
+ 23  Checker.PowerGridViolations       59  Checker.XOR
+ 24  OpenROAD.STAMidPNR                60  Magic.DRC
+ 25  OpenROAD.RepairDesignPostGPL      61  KLayout.DRC
+ 26  Odb.ManualGlobalPlacement         62  Checker.MagicDRC
+ 27  OpenROAD.DetailedPlacement        63  Checker.KLayoutDRC
+ 28  OpenROAD.CTS                      64  Magic.SpiceExtraction
+ 29  OpenROAD.STAMidPNR-1              65  Checker.IllegalOverlap
+ 30  OpenROAD.ResizerTimingPostCTS     66  Netgen.LVS
+ 31  OpenROAD.STAMidPNR-2              67  Checker.LVS
+ 32  OpenROAD.GlobalRouting            68  Checker.SetupViolations
+ 33  OpenROAD.CheckAntennas            69  Checker.HoldViolations
+ 34  OpenROAD.RepairDesignPostGRT      70  Checker.MaxSlewViolations
+ 35  Odb.DiodesOnPorts                 71  Checker.MaxCapViolations
+ 36  Odb.HeuristicDiodeInsertion       72  Misc.ReportManufacturability
+
+
+--------------------------------------------------------------------------------
+ 12.4  SMALL FLOWS
+--------------------------------------------------------------------------------
+Optimizing (6):
+  1 Yosys.Synthesis        4 OpenROAD.Floorplan
+  2 OpenROAD.CheckSDCFiles 5 OpenROAD.IOPlacement
+  3 OpenROAD.STAPrePNR     6 OpenROAD.GlobalPlacement
+
+SynthesisExploration (3):
+  1 Yosys.Synthesis  2 OpenROAD.CheckSDCFiles  3 OpenROAD.STAPrePNR
+
+OpenInKLayout (1):   1 KLayout.OpenGUI
+OpenInOpenROAD (1):  1 OpenROAD.OpenGUI
+OpenInMagic (1):     1 Magic.OpenGUI
+
+
+================================================================================
+ 13.  STEPS THAT EXIST BUT ARE NOT IN THE CLASSIC FLOW
+================================================================================
+
+These are registered and callable, but you will only reach them through the
+Chip flow, a custom flow, or `python3 -m librelane.steps run`. Do NOT try to
+target them with --only inside a Classic run - the step is not in the flow and
+the ID will not resolve.
+
+  In the Chip flow only:
+      OpenROAD.PadRing
+      KLayout.Antenna              Checker.KLayoutAntenna
+      KLayout.Density              Checker.KLayoutDensity
+      KLayout.SealRing             KLayout.Filler
+
+  In no built-in flow (custom flows / standalone use):
+      KLayout.LVS                  Magic.Filler
+      KLayout.OpenGUI              Magic.OpenGUI          OpenROAD.OpenGUI
+      Magic.RCX                    Misc.LoadBaseSDC
+      Odb.FuzzyDiodePlacement      Odb.PortDiodePlacement
+      Odb.InsertECOBuffers         Odb.InsertECODiodes
+      OpenROAD.DEFtoODB            OpenROAD.LayoutSTA
+      OpenROAD.RepairDesign        OpenROAD.UnplaceAll
+      OpenROAD.WriteCDL            Yosys.Resynthesis
+      Yosys.VHDLSynthesis          (VHDLClassic flow only)
+
+The ECO steps (Odb.InsertECOBuffers, Odb.InsertECODiodes) are documented under
+"Using ECO Steps" at
+https://librelane.readthedocs.io/en/stable/usage/eco.html
+
+
+================================================================================
+ 14.  TROUBLESHOOTING
+================================================================================
+
+Warnings seem to be missing while a run is in progress
+    LibreLane collects step warnings and prints them ONCE, in a summary block
+    at the very end ("The following warnings were generated by the flow:",
+    librelane/flows/flow.py:699). Grepping a log mid-run will not find them
+    and gives a false all-clear. Wait for the process to exit, or read
+    runs/$TAG/warning.log instead.
+
+"cannot attach stdin to a TTY-enabled container because stdin is not a terminal"
+    Your shell has no TTY. Add --docker-no-tty BEFORE --dockerized. Section 1.
+
+A step ran but produced no directory at all
+    It is gated off by a RUN_* variable. Section 4A. Check with:
+        grep "Gating variable" runs/$TAG/flow.log
+
+Step directory numbers do not match section 12
+    Expected - see section 10. Locate directories by name, not number:
+        ls -d runs/$TAG/*-klayout-streamout
+
+Lint (or synthesis) appears twice in the run directory
+    You used `--run-tag "$TAG" --to X` on an existing run, which restarts from
+    step 1. Section 4.2 and rule (11).
+
+Flow fails at a checker
+    The checker names the report it read. Open the corresponding step
+    directory under runs/$TAG/ and read reports/ there. Fix the CAUSE, then
+    re-run from the step that produced the report, not from the checker.
+
+"Run directory already exists"
+    Add --overwrite, or pick a new tag.
+
+"tag and last_run cannot be used simultaneously"
+    You passed both --run-tag and --last-run. Drop one.
+
+"last_run used without any existing runs"
+    You used --last-run before any run existed. Start with --run-tag.
+
+Path starting with a tilde is rejected
+    Let bash expand it: `--pdk-root ~/.ciel`, never `--pdk-root=~/.ciel` and
+    never `--pdk-root "~/.ciel"`. Or use an absolute path.
+
+Wrong design state after re-running an early step
+    Once you re-run step 20, the states written by steps 21-80 are stale but
+    still on disk. Initial-state selection is by modification time, so it
+    usually resolves correctly - but the safe move after re-running an early
+    step is to continue forward with an explicit range, or pin the state
+    explicitly with -i.
+
+Detailed routing takes forever or fails to converge
+    Almost always a placement density or PDN problem, not a router problem.
+    Lower PL_TARGET_DENSITY or FP_CORE_UTIL and re-run from floorplan.
+
+GUI does not open under --dockerized
+    xhost +local:docker
+    and confirm $DISPLAY is set in the shell you launch from.
+
+OpenROAD GUI warns "[GUI-0076] qglx_findConfig: Failed to finding matching
+FBConfig for QSurfaceFormat…"
+    Qt could not negotiate a matching GLX/OpenGL visual inside the container.
+    Seen on hosts carrying only Mesa software GL with no vendor GPU driver
+    (check with `ls /usr/lib/x86_64-linux-gnu/libGLX*`). KLayout does not emit
+    it because it does not request a GL context the same way.
+
+    MEASURED, NOT ASSUMED: setting LIBGL_ALWAYS_SOFTWARE=1 does NOT suppress
+    this warning. Two runs of OpenInOpenROAD on the same design - one via
+    --dockerized, one via a hand-written `docker run` with
+    LIBGL_ALWAYS_SOFTWARE=1 - produced byte-identical output (1995 bytes),
+    both containing exactly one GUI-0076 warning. Do not reach for that
+    variable expecting it to help.
+
+    In both runs OpenROAD still reached "Flow complete" and exited 0, which is
+    consistent with the warning being non-fatal and Qt continuing anyway. If
+    your window does appear, treat GUI-0076 as noise and ignore it.
+
+    If the window genuinely does NOT appear, this warning is not enough to
+    conclude GL is the cause. Isolate it first:
+      1. Open the same run in KLayout (--flow OpenInKLayout). If KLayout shows
+         and OpenROAD does not, the problem is OpenROAD/Qt/GL, not X11.
+      2. If NEITHER shows, the problem is X11: re-run `xhost +local:docker`,
+         confirm $DISPLAY is set, and confirm /tmp/.X11-unix exists.
+
+    For reference, the equivalent hand-written container invocation (verified
+    to run - `--version` and the full OpenInOpenROAD flow both succeed through
+    it) is below. Use it when you need to set an env var that --dockerized
+    will not forward; note --docker-mount CANNOT inject -e flags (section 1):
+
+        docker run --rm -it \
+            -e DISPLAY="$DISPLAY" \
+            -v /tmp/.X11-unix:/tmp/.X11-unix \
+            -v "$HOME:$HOME" -v "$HOME/.ciel:$HOME/.ciel" \
+            -e PDK_ROOT="$HOME/.ciel" \
+            -w "$PWD" --network host --security-opt seccomp=unconfined \
+            --user "$(id -u):$(id -g)" \
+            ghcr.io/librelane/librelane:3.0.6 \
+            python3 -m librelane ./config.json --last-run --flow OpenInOpenROAD
+
+    (No --dockerized inside the container - you are already in it.)
+
+A step "did nothing"
+    Check the log for "skipping <id>…". See section 7 - several steps
+    self-skip based on config.
+
+Inspect any step's inputs and outputs
+    runs/$TAG/<NN>-<step-name>/
+        config.json      the exact configuration that step saw
+        state_out.json   the design state it produced
+        reports/         its reports
+        *.log            tool output
+
+See what the step CLI accepts
+    python3 -m librelane.steps --help
+    python3 -m librelane.steps run --help
+
+
+================================================================================
+ 15.  NOTES CARRIED OVER FROM THE SOURCE FILES (design-specific)
+================================================================================
+
+These came from the full_adder design at /home/zakir/Desktop/fulladder and are
+NOT general LibreLane behaviour. Re-verify against your own config.json.
+
+  - "CLOCK_PORT": null - the design is combinational, so CTS is effectively a
+    no-op and setup/hold checks have nothing to constrain. The step still runs
+    and must not be skipped, because later steps read the state it writes.
+    Do not read a clean timing report here as evidence a clocked design passes.
+
+  - "IO_PIN_ORDER_CFG": "dir::pin_order.cfg" is set, so Odb.CustomIOPlacement
+    (26) is authoritative for pin locations and OpenROAD.IOPlacement (25)
+    skips itself. The current pin_order.cfg places:
+        #E   Sum, Cout      (east edge)
+        #W   A, B, Cin      (west edge)
+
+  - "FP_CORE_UTIL": 5 is very low. Fine for a tiny design - it guarantees
+    routability - but not representative of a real utilisation target.
+
+The older source files also contained a native (non-dockerized) invocation
+with an explicit PDK root, which remains valid:
+
+    librelane --pdk sky130A --pdk-root /home/zakir/.ciel ./config.json --run-tag "$TAG"
+
+
+================================================================================
+ 16.  VERIFIED WORKED EXAMPLE - mux8x1, RTL TO CLEAN GDSII
+================================================================================
+
+Everything in sections 4 and 5 was executed against this design on
+LibreLane 3.0.6 / sky130A. Result: 76 step directories, a 133 570-byte GDSII,
+and ZERO violations of every kind. This is the proof the commands work.
+
+
+--------------------------------------------------------------------------------
+ 16.1  DIRECTORY LAYOUT
+--------------------------------------------------------------------------------
+    /home/zakir/Desktop/mux8x1/
+        config.json
+        pin_order.cfg
+        src/
+            mux8x1.v
+        runs/
+            mux8x1_flow/          <- created by the commands below
+
+
+--------------------------------------------------------------------------------
+ 16.2  src/mux8x1.v
+--------------------------------------------------------------------------------
+    // 8:1 multiplexer
+    //   I : 8 data inputs   (placed on the WEST edge)
+    //   S : 3 select lines  (placed on the SOUTH edge)
+    //   Y : 1 data output   (placed on the EAST edge)
+
+    module mux8x1 (
+        input  wire [7:0] I,
+        input  wire [2:0] S,
+        output wire       Y
+    );
+
+        assign Y = I[S];
+
+    endmodule
+
+
+--------------------------------------------------------------------------------
+ 16.3  config.json
+--------------------------------------------------------------------------------
+    {
+        "DESIGN_NAME": "mux8x1",
+
+        "VERILOG_FILES": [
+            "dir::src/mux8x1.v"
+        ],
+
+        "CLOCK_PORT": null,
+        "CLOCK_PERIOD": 10,
+
+        "IO_PIN_ORDER_CFG": "dir::pin_order.cfg",
+
+        "FP_CORE_UTIL": 5,
+        "PL_TARGET_DENSITY": 0.50
+    }
+
+Because IO_PIN_ORDER_CFG is set, OpenROAD.IOPlacement self-skips and
+Odb.CustomIOPlacement does the work. Exactly as described in section 7.1.
+
+
+--------------------------------------------------------------------------------
+ 16.4  pin_order.cfg
+--------------------------------------------------------------------------------
+Select lines SOUTH, data inputs WEST, output EAST. Note the escaped brackets -
+these are regular expressions, so `I[0]` must be written `I\[\d+\]`.
+
+    #N
+
+    #E
+    Y
+
+    #S
+    S\[\d+\]
+
+    #W
+    I\[\d+\]
+
+VERIFIED RESULT, read back out of
+runs/mux8x1_flow/26-odb-customioplacement/mux8x1.def
+(DIEAREA 0 0 50110 60830):
+
+    I[0] x=  300 y= 5780   W        S[0] x= 8510 y=140   S
+    I[1] x=  300 y=12580   W        S[1] x=25070 y=140   S
+    I[2] x=  300 y=19380   W        S[2] x=41630 y=140   S
+    I[3] x=  300 y=26180   W
+    I[4] x=  300 y=32980   W        Y    x=49810 y=30260 E
+    I[5] x=  300 y=39780   W
+    I[6] x=  300 y=46580   W        VPWR / VGND: not edge-placed (PDN pins)
+    I[7] x=  300 y=53380   W
+
+All 12 signal pins landed on the requested edges.
+
+
+--------------------------------------------------------------------------------
+ 16.5  THE EXACT COMMAND SEQUENCE THAT WAS RUN
+--------------------------------------------------------------------------------
+These are reproduced verbatim, including --docker-no-tty, because they were
+executed from a non-interactive shell (see section 1). IF YOU ARE IN A NORMAL
+TERMINAL, DELETE `--docker-no-tty` FROM EVERY LINE - it is not needed and the
+commands are otherwise identical to sections 4 and 5.
+
+    cd /home/zakir/Desktop/mux8x1
+    export TAG=mux8x1_flow
+
+    # --- create the run (the ONLY command that uses --run-tag) -------------
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --run-tag "$TAG" --to Checker.LintWarnings
+
+    # --- every stage after this continues with --last-run ------------------
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from Yosys.JsonHeader              --to OpenROAD.STAPrePNR
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.Floorplan            --to OpenROAD.TapEndcapInsertion
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from Odb.AddPDNObstructions        --to Odb.AddRoutingObstructions
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacement      --to Odb.ManualGlobalPlacement
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --only OpenROAD.DetailedPlacement
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.CTS                  --to OpenROAD.STAMidPNR-2
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.GlobalRouting        --to OpenROAD.STAMidPNR-3
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.DetailedRouting      --to Checker.WireLength
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.FillInsertion        --to Odb.CellFrequencyTables
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from OpenROAD.RCX                  --to OpenROAD.IRDropReport
+
+    # --- stream-out: THIS PRODUCES THE GDSII -------------------------------
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from Magic.StreamOut               --to Odb.CheckDesignAntennaProperties
+
+    # --- signoff -----------------------------------------------------------
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from KLayout.XOR                   --to Checker.XOR
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from Magic.DRC                     --to Checker.KLayoutDRC
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from Magic.SpiceExtraction         --to Checker.LVS
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --from Checker.SetupViolations       --to Misc.ReportManufacturability
+
+Note the last line. Section 5.4 uses `--from Yosys.EQY`, which also works, but
+Yosys.EQY is gated off by default (RUN_EQY=False) so it contributes nothing.
+Starting at Checker.SetupViolations is the honest form. If you want the
+equivalence check, set RUN_EQY=true and use --from Yosys.EQY.
+
+
+--------------------------------------------------------------------------------
+ 16.6  VERIFIED RESULTS
+--------------------------------------------------------------------------------
+Run directory: 76 step directories, contiguous 01-76 (80 Classic steps minus
+the 4 gated ones from section 4A.2).
+
+GDSII:
+    runs/mux8x1_flow/final/gds/mux8x1.gds        133 570 bytes
+
+Signoff metrics from runs/mux8x1_flow/final/metrics.json - all zero:
+
+    design__violations                  = 0
+    magic__drc_error__count             = 0
+    klayout__drc_error__count           = 0
+    design__lvs_error__count            = 0
+    design__xor_difference__count       = 0
+    route__drc_errors                   = 0
+    route__antenna_violation__count     = 0
+    antenna__violating__nets            = 0
+    design__max_slew_violation__count   = 0
+    design__max_cap_violation__count    = 0
+    design__max_fanout_violation__count = 0
+    design__power_grid_violation__count = 0
+    flow__errors__count                 = 0
+    route__wirelength                   = 382
+
+Expected, harmless warnings seen during the run:
+    [OpenROAD.CheckSDCFiles] 'PNR_SDC_FILE' is not defined. Using generic
+        fallback SDC …            -> no SDC supplied; fine for this design
+    [STA-0353/0419/0450] virtual clock '__VIRTUAL_CLK__' …
+        -> CLOCK_PORT is null, so STA invents a virtual clock. Expected for a
+           purely combinational design.
+
+View the result:
+
+    python3 -m librelane --docker-no-tty --dockerized ./config.json --last-run --flow OpenInKLayout
+    klayout runs/mux8x1_flow/final/gds/mux8x1.gds
+
+
+================================================================================
+ 17.  VERIFICATION MATRIX - EVERY COMMAND IN SECTIONS 4, 4A AND 5
+================================================================================
+
+Test design : rca, a 4-bit ripple carry adder at /home/zakir/Desktop/rca
+PDK / tool  : sky130A, LibreLane 3.0.6, ghcr.io/librelane/librelane:3.0.6
+Method      : each command executed verbatim under a real PTY, then the run
+              directory inspected to confirm what the step actually did.
+Result      : 98 of 98 commands exited 0.
+
+
+--------------------------------------------------------------------------------
+ 17.1  TEST DESIGN
+--------------------------------------------------------------------------------
+    /home/zakir/Desktop/rca/
+        config.json
+        pin_order.cfg
+        src/rca.v
+
+src/rca.v - structural, four chained full adders. No external carry-in port,
+so the port list matches the pin plan exactly and nothing is left unmatched
+(ERRORS_ON_UNMATCHED_IO defaults to erroring on design pins absent from the
+config file).
+
+    module full_adder (input a, input b, input cin, output sum, output cout);
+        assign sum  = a ^ b ^ cin;
+        assign cout = (a & b) | (b & cin) | (a & cin);
+    endmodule
+
+    module rca (input [3:0] A, input [3:0] B, output [3:0] Sum, output Cout);
+        wire [3:0] carry;
+        full_adder fa0 (.a(A[0]), .b(B[0]), .cin(1'b0),     .sum(Sum[0]), .cout(carry[0]));
+        full_adder fa1 (.a(A[1]), .b(B[1]), .cin(carry[0]), .sum(Sum[1]), .cout(carry[1]));
+        full_adder fa2 (.a(A[2]), .b(B[2]), .cin(carry[1]), .sum(Sum[2]), .cout(carry[2]));
+        full_adder fa3 (.a(A[3]), .b(B[3]), .cin(carry[2]), .sum(Sum[3]), .cout(carry[3]));
+        assign Cout = carry[3];
+    endmodule
+
+config.json - identical in shape to section 16.3, DESIGN_NAME "rca".
+
+pin_order.cfg - A and B west, Sum and Cout east. Brackets are escaped because
+these entries are regular expressions:
+
+    #N
+
+    #E
+    Sum\[\d+\]
+    Cout
+
+    #S
+
+    #W
+    A\[\d+\]
+    B\[\d+\]
+
+VERIFIED placement, read out of 26-odb-customioplacement/rca.def
+(DIEAREA 0 0 72305 83025):
+
+    WEST : A[0] A[1] A[2] A[3] B[0] B[1] B[2] B[3]
+    EAST : Sum[0] Sum[1] Sum[2] Sum[3] Cout
+    VPWR / VGND : not edge-placed (PDN pins - expected)
+
+
+--------------------------------------------------------------------------------
+ 17.2  PASS 1 - ALL 80 STEPS RUN INDIVIDUALLY WITH --only  (tag: rca_flow)
+--------------------------------------------------------------------------------
+Each step executed on its own, in flow order, so every one received the state
+its predecessor produced. This is the ONLY honest way to test the "Individually"
+commands in section 4 - running them standalone against a finished design tests
+nothing (see rule (1)).
+
+    step 1 :  python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --only Verilator.Lint
+    steps 2+: python3 -m librelane --dockerized ./config.json --last-run --only <StepID>
+
+Outcome: 80/80 exit 0. 76 directories numbered 01-76; 4 steps gated with no
+directory, exactly as section 4A.2 predicts. Directory ordinals matched the
+section 10 formula precisely, including the -1/-2/-3 drift after step 40.
+
+Breakdown by mechanism (section 4A):
+    RAN with a tool log ......................... 40 steps
+    Checkers / pure-Python, ran, no log (mech C)  22 steps
+    Self-skipped (mech B) ....................... 13 steps
+    Composite, logs in sub-dirs (mech D) ......... 1 step  (RepairAntennas)
+    Gated, no directory (mech A) ................. 4 steps
+
+Final result of the individually-driven flow:
+    runs/rca_flow/final/gds/rca.gds              213 026 bytes
+    design__violations              = 0     design__lvs_error__count   = 0
+    magic__drc_error__count         = 0     design__xor_difference__count = 0
+    klayout__drc_error__count       = 0     route__drc_errors          = 0
+    antenna__violating__nets        = 0     flow__errors__count        = 0
+    route__wirelength               = 632
+
+A flow driven entirely by 80 separate --only invocations produces the same
+clean signoff as one end-to-end run.
+
+
+--------------------------------------------------------------------------------
+ 17.3  PASS 2 - ALL 18 RANGE COMMANDS  (tag: rca_ranges)
+--------------------------------------------------------------------------------
+Every "Whole group" command from sections 4 and 5, in order. 18/18 exit 0:
+
+    §4.1   --run-tag "$TAG" --to Checker.LintWarnings
+    §4.2   --last-run --from Yosys.JsonHeader            --to OpenROAD.STAPrePNR
+    §4.2   --last-run --from Yosys.Synthesis             --to Yosys.Synthesis
+    §4.3   --last-run --from OpenROAD.Floorplan          --to OpenROAD.TapEndcapInsertion
+    §4.4   --last-run --from Odb.AddPDNObstructions      --to Odb.AddRoutingObstructions
+    §4.5   --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+    §4.6   --last-run --from OpenROAD.GlobalPlacement    --to Odb.ManualGlobalPlacement
+    §4.7   --last-run --only OpenROAD.DetailedPlacement
+    §4.8   --last-run --from OpenROAD.CTS                --to OpenROAD.STAMidPNR-2
+    §4.9   --last-run --from OpenROAD.GlobalRouting      --to OpenROAD.STAMidPNR-3
+    §4.10  --last-run --from OpenROAD.DetailedRouting    --to Checker.WireLength
+    §4.11  --last-run --from OpenROAD.FillInsertion      --to Odb.CellFrequencyTables
+    §4.12  --last-run --from OpenROAD.RCX                --to OpenROAD.IRDropReport
+    §4.13  --last-run --from Magic.StreamOut             --to Odb.CheckDesignAntennaProperties
+    §5.1   --last-run --from KLayout.XOR                 --to Checker.XOR
+    §5.2   --last-run --from Magic.DRC                   --to Checker.KLayoutDRC
+    §5.3   --last-run --from Magic.SpiceExtraction       --to Checker.LVS
+    §5.4   --last-run --from Yosys.EQY                   --to Misc.ReportManufacturability
+
+
+--------------------------------------------------------------------------------
+ 17.4  COMMANDS THAT "WORK" BUT DO NOTHING - READ THIS
+--------------------------------------------------------------------------------
+Exit 0 does NOT mean the step did work. These four commands from section 4
+complete successfully and produce no directory at all, because their gating
+variable is False by default (section 4A.2):
+
+    --only OpenROAD.RepairDesignPostGRT      RUN_POST_GRT_DESIGN_REPAIR=False
+    --only Odb.HeuristicDiodeInsertion       RUN_HEURISTIC_DIODE_INSERTION=False
+    --only OpenROAD.ResizerTimingPostGRT     RUN_POST_GRT_RESIZER_TIMING=False
+    --only Yosys.EQY                         RUN_EQY=False
+
+And these complete, create a directory, and still do no work under a typical
+combinational config (section 4A.3):
+
+    --only OpenROAD.GlobalPlacementSkipIO    (IO_PIN_ORDER_CFG set)
+    --only OpenROAD.IOPlacement              (IO_PIN_ORDER_CFG set)
+    --only Odb.ApplyDEFTemplate              (no FP_DEF_TEMPLATE)
+    --only Odb.ManualMacroPlacement          (no macros)
+    --only Odb.CheckMacroAntennaProperties   (no macros)
+    --only Odb.AddPDNObstructions            (no PDN_OBSTRUCTIONS)
+    --only Odb.RemovePDNObstructions         (no PDN_OBSTRUCTIONS)
+    --only Odb.AddRoutingObstructions        (no ROUTING_OBSTRUCTIONS)
+    --only Odb.RemoveRoutingObstructions     (no ROUTING_OBSTRUCTIONS)
+    --only Odb.ManualGlobalPlacement         (no MANUAL_GLOBAL_PLACEMENTS)
+    --only Odb.DiodesOnPorts                 (DIODE_ON_PORTS='none')
+    --only OpenROAD.CTS                      (CLOCK_PORT null)
+
+None of these is a bug and none needs fixing. They are all correct no-ops for
+a small combinational design with custom pin placement. But if you are running
+them expecting an effect, you will not get one, and nothing will tell you so
+unless you read flow.log.
+
+
+================================================================================
+ REFERENCES
+================================================================================
+  LibreLane documentation (stable) : https://librelane.readthedocs.io/en/stable/
+  Pin placer config file format    : https://librelane.readthedocs.io/en/stable/reference/pin_placement_cfg.html
+  Usage guides (PDN, macros, ECO,
+    timing closure, custom flows)  : https://librelane.readthedocs.io/en/stable/usage/index.html
+  Docker-based installation        : https://librelane.readthedocs.io/en/stable/installation/docker_installation/index.html
+  Source repository                : https://github.com/librelane/librelane
+
+================================================================================
+ END - librelane_master_v1.txt
+================================================================================

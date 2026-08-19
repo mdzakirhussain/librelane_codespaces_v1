@@ -1,0 +1,27 @@
+
+#python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInKLayout
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInMagic
+
+# 1  Synthesis (RTL -> gate-level netlist)
+
+python3 -m librelane --dockerized ./config.json --run-tag fa --to Yosys.Synthesis
+
+# 2  Floorplanning (die/core area + placement site grid)
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.Floorplan --to OpenROAD.Floorplan
+
+
+# 3  Tap / Endcap cell insertion
+
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.TapEndcapInsertion --to OpenROAD.TapEndcapInsertion
+
+# 4  I/O pin placement
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.IOPlacement --to OpenROAD.IOPlacement
+
+# 5  Power Distribution Network
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GeneratePDN --to OpenROAD.GeneratePDN
+

@@ -1,0 +1,18 @@
+{
+    "DESIGN_NAME": "counter_8bit",
+
+    "VERILOG_FILES": [
+        "dir::src/counter_8bit.v"
+    ],
+
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 10,
+
+    "PNR_SDC_FILE": "dir::count.sdc",
+    "SIGNOFF_SDC_FILE": "dir::count.sdc",
+
+    "IO_PIN_ORDER_CFG": "dir::pin_order.cfg",
+
+    "FP_CORE_UTIL": 25,
+    "PL_TARGET_DENSITY": 0.50
+}

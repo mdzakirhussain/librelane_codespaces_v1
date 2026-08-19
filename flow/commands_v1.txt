@@ -1,0 +1,220 @@
+================================================================================
+ commands_v1.txt
+ Commands lifted verbatim from sections 4, 4A and 5. No prose.
+ Run in this order. Set the tag once per shell session:  export TAG=my_run
+================================================================================
+
+
+# ------------------------------------------------------------------ 4.1  LINT
+
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to Checker.LintWarnings
+
+python3 -m librelane --dockerized ./config.json --last-run --only Verilator.Lint
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.LintErrors
+
+
+# ------------------------------------------------------------- 4.2  SYNTHESIS
+
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.JsonHeader --to OpenROAD.STAPrePNR
+
+# DO NOT USE - restarts from step 1 and duplicates the lint steps:
+# python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to OpenROAD.STAPrePNR
+
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.Synthesis --to Yosys.Synthesis
+python3 -m librelane --dockerized ./config.json --last-run --only Yosys.Synthesis
+
+
+# --------------------------------------------- 4.3  FLOORPLAN + TAP/ENDCAP
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.Floorplan --to OpenROAD.TapEndcapInsertion
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.Floorplan
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DumpRCValues
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.CheckMacroAntennaProperties
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.SetPowerConnections
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ManualMacroPlacement
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CutRows
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.TapEndcapInsertion
+
+
+# ------------------------------------------ 4.4  POWER DISTRIBUTION NETWORK
+
+python3 -m librelane --dockerized ./config.json --last-run --from Odb.AddPDNObstructions --to Odb.AddRoutingObstructions
+
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.AddPDNObstructions
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.GeneratePDN
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.RemovePDNObstructions
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.AddRoutingObstructions
+
+
+# ------------------------------------------------- 4.5  I/O PIN PLACEMENT
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+
+# When DEFAULT (automatic) IO placement, use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.IOPlacement
+
+# When CUSTOM IO placement (driven by IO_PIN_ORDER_CFG), use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.CustomIOPlacement
+
+# When IO placement comes from a DEF template (FP_DEF_TEMPLATE), use the below
+
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ApplyDEFTemplate
+
+
+# ------------------------------ 4.6  GLOBAL PLACEMENT + POST-GPL REPAIR
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacement --to Odb.ManualGlobalPlacement
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.GlobalPlacement
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.WriteVerilogHeader
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.PowerGridViolations
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairDesignPostGPL
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ManualGlobalPlacement
+
+
+# --------------------------------- 4.7  DETAILED PLACEMENT / LEGALISATION
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedPlacement
+
+
+# --------------------------- 4.8  CLOCK TREE SYNTHESIS + POST-CTS TIMING
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CTS --to OpenROAD.STAMidPNR-2
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CTS
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR-1
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.ResizerTimingPostCTS
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR-2
+
+
+# ------------------------------- 4.9  GLOBAL ROUTING + ANTENNA REPAIR
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalRouting --to OpenROAD.STAMidPNR-3
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.GlobalRouting
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CheckAntennas
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairDesignPostGRT
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.DiodesOnPorts
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.HeuristicDiodeInsertion
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RepairAntennas
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.ResizerTimingPostGRT
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAMidPNR-3
+
+
+# ------------------------------------------------ 4.10  DETAILED ROUTING
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.DetailedRouting --to Checker.WireLength
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedRouting
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.RemoveRoutingObstructions
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.CheckAntennas-1
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.TrDRC
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ReportDisconnectedPins
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.DisconnectedPins
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.ReportWireLength
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.WireLength
+
+
+# -------------------------------------------------- 4.11  FILL INSERTION
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.FillInsertion --to Odb.CellFrequencyTables
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.FillInsertion
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.CellFrequencyTables
+
+
+# ------------------------- 4.12  PARASITIC EXTRACTION + POST-PnR STA
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.RCX --to OpenROAD.IRDropReport
+
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.RCX
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.STAPostPNR
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.IRDropReport
+
+
+# ------------------ 4.13  STREAM-OUT   <<< THIS PRODUCES THE GDSII >>>
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Odb.CheckDesignAntennaProperties
+
+python3 -m librelane --dockerized ./config.json --last-run --only Magic.StreamOut
+python3 -m librelane --dockerized ./config.json --last-run --only KLayout.StreamOut
+python3 -m librelane --dockerized ./config.json --last-run --only KLayout.Render
+python3 -m librelane --dockerized ./config.json --last-run --only Magic.WriteLEF
+python3 -m librelane --dockerized ./config.json --last-run --only Odb.CheckDesignAntennaProperties
+
+
+# ==================================================================
+# 4A.  GATING VARIABLES - DIAGNOSTICS AND OVERRIDES
+# ==================================================================
+
+# was it gated? (no directory at all)
+grep "Gating variable" runs/$TAG/flow.log
+
+# did it self-skip, and why?
+grep -iE "skipping '<StepID>'|Returning state unaltered" runs/$TAG/flow.log
+
+# did it really run? (any of these is proof)
+ls runs/$TAG/NN-*/{*.log,COMMANDS} 2>/dev/null
+ls -d runs/$TAG/NN-*/[0-9]-*/
+python3 -c "import json;print(json.load(open('runs/$TAG/NN-.../state_out.json'))['metrics'])"
+
+# dump the resolved RUN_* values for your design
+python3 -c "import json;r=json.load(open('runs/$TAG/resolved.json'));[print(k,'=',r[k]) for k in sorted(r) if k.startswith('RUN_')]"
+
+# turn the off-by-default steps on for a single run
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+    -c 'RUN_POST_GRT_DESIGN_REPAIR=true' \
+    -c 'RUN_POST_GRT_RESIZER_TIMING=true' \
+    -c 'RUN_EQY=true'
+
+# enable diodes on ports
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+    -c 'DIODE_ON_PORTS="both"'
+
+
+# ==================================================================
+# 5.  SIGNOFF / VERIFICATION
+# ==================================================================
+
+# ------------------------------------------ 5.1  XOR - LAYOUT COMPARISON
+
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to Checker.XOR
+
+python3 -m librelane --dockerized ./config.json --last-run --only KLayout.XOR
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.XOR
+
+
+# ----------------------------------------- 5.2  DRC - DESIGN RULE CHECK
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+
+python3 -m librelane --dockerized ./config.json --last-run --only Magic.DRC
+python3 -m librelane --dockerized ./config.json --last-run --only KLayout.DRC
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.MagicDRC
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.KLayoutDRC
+
+
+# --------------------------------------- 5.3  LVS - LAYOUT VS SCHEMATIC
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+
+python3 -m librelane --dockerized ./config.json --last-run --only Magic.SpiceExtraction
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.IllegalOverlap
+python3 -m librelane --dockerized ./config.json --last-run --only Netgen.LVS
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.LVS
+
+
+# ------------------------------------------------- 5.4  FINAL CHECKERS
+
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.EQY --to Misc.ReportManufacturability
+
+python3 -m librelane --dockerized ./config.json --last-run --only Yosys.EQY
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.SetupViolations
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.HoldViolations
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.MaxSlewViolations
+python3 -m librelane --dockerized ./config.json --last-run --only Checker.MaxCapViolations
+python3 -m librelane --dockerized ./config.json --last-run --only Misc.ReportManufacturability

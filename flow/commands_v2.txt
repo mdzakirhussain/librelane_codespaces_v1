@@ -1,0 +1,143 @@
+================================================================================
+ commands_v2.txt   -   de-duplicated from commands_v1.txt
+================================================================================
+
+ v1 had 89 librelane commands. 72 of them were redundant.
+
+ WHY: each stage in v1 listed a "Whole group" range AND the "Individually"
+ commands for the same steps. The 17 ranges below were checked against the
+ installed Classic flow and cover steps 1-80 EXACTLY ONCE - contiguous, no
+ gaps, no overlaps. Running the individual commands as well just does the
+ same work twice and appends duplicate step directories.
+
+ Also removed:
+   * "Synthesis alone - long form" / "short form". These were two spellings of
+     the same thing (--from X --to X IS --only X), and both were already
+     inside the 4.2 range.
+   * The commented-out "DO NOT USE" command - it is an inferior duplicate of
+     the 4.2 range.
+   * The three mutually-exclusive 4.5 IO-placement commands. The 4.5 range
+     runs all of steps 24-27 and the steps self-select on your config, so the
+     correct one runs automatically.
+
+ Run top to bottom. Set the tag once per shell session:
+
+     export TAG=my_run
+
+ Step coverage of each command is noted in the comment.
+
+================================================================================
+ 1.  RTL -> GDSII
+================================================================================
+
+# 4.1  lint                                                        steps  1-4
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to Checker.LintWarnings
+
+# 4.2  synthesis                                                   steps  5-12
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.JsonHeader --to OpenROAD.STAPrePNR
+
+# 4.3  floorplan + tap/endcap                                      steps 13-19
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.Floorplan --to OpenROAD.TapEndcapInsertion
+
+# 4.4  power distribution network                                  steps 20-23
+python3 -m librelane --dockerized ./config.json --last-run --from Odb.AddPDNObstructions --to Odb.AddRoutingObstructions
+
+# 4.5  I/O pin placement (placer self-selects on your config)      steps 24-27
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+
+# 4.6  global placement + post-GPL repair                          steps 28-33
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacement --to Odb.ManualGlobalPlacement
+
+# 4.7  detailed placement / legalisation                           step  34
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedPlacement
+
+# 4.8  clock tree synthesis + post-CTS timing                      steps 35-38
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CTS --to OpenROAD.STAMidPNR-2
+
+# 4.9  global routing + antenna repair                             steps 39-46
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalRouting --to OpenROAD.STAMidPNR-3
+
+# 4.10 detailed routing                                            steps 47-54
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.DetailedRouting --to Checker.WireLength
+
+# 4.11 fill insertion                                              steps 55-56
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.FillInsertion --to Odb.CellFrequencyTables
+
+# 4.12 parasitic extraction + post-PnR STA                         steps 57-59
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.RCX --to OpenROAD.IRDropReport
+
+# 4.13 stream-out   <<< THIS PRODUCES THE GDSII >>>                steps 60-64
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Odb.CheckDesignAntennaProperties
+
+
+================================================================================
+ 2.  SIGNOFF / VERIFICATION
+================================================================================
+
+# 5.1  XOR - layout comparison                                     steps 65-66
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to Checker.XOR
+
+# 5.2  DRC - design rule check (Magic + KLayout)                   steps 67-70
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+
+# 5.3  LVS - layout vs schematic                                   steps 71-74
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+
+# 5.4  final checkers + manufacturability                          steps 75-80
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.EQY --to Misc.ReportManufacturability
+
+
+================================================================================
+ 3.  RE-RUNNING A SINGLE STEP
+================================================================================
+
+v1 spelled out 72 separate one-step commands. They are all this one template -
+substitute any step ID from the Classic flow:
+
+python3 -m librelane --dockerized ./config.json --last-run --only <StepID>
+
+List the valid step IDs in flow order:
+
+python3 -c "from librelane.flows import Flow; [print(i, s.id) for i, s in enumerate(Flow.factory.get('Classic').Steps, 1)]"
+
+
+================================================================================
+ 4.  DIAGNOSTICS AND OVERRIDES
+================================================================================
+
+# was a step gated off? (gated steps create NO directory at all)
+grep "Gating variable" runs/$TAG/flow.log
+
+# did a step self-skip, and why?
+grep -iE "skipping|Returning state unaltered" runs/$TAG/flow.log
+
+# did a step really run? locate it BY NAME, never by number
+ls -d runs/$TAG/*-yosys-synthesis
+ls runs/$TAG/*-yosys-synthesis/{*.log,COMMANDS} 2>/dev/null
+ls -d runs/$TAG/*-openroad-repairantennas/[0-9]-*/
+
+# dump the resolved RUN_* gating values for your design
+python3 -c "import json;r=json.load(open('runs/$TAG/resolved.json'));[print(k,'=',r[k]) for k in sorted(r) if k.startswith('RUN_')]"
+
+# final results
+ls -la runs/$TAG/final/gds/
+cat runs/$TAG/final/metrics.csv
+
+# turn the off-by-default steps on for a single run
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+    -c 'RUN_POST_GRT_DESIGN_REPAIR=true' \
+    -c 'RUN_POST_GRT_RESIZER_TIMING=true' \
+    -c 'RUN_EQY=true'
+
+# enable diodes on ports (default is 'none')
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" \
+    -c 'DIODE_ON_PORTS="both"'
+
+
+================================================================================
+ 5.  GUI
+================================================================================
+
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInKLayout
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInMagic

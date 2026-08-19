@@ -1,0 +1,18 @@
+{
+    "DESIGN_NAME": "counter32_v2",
+
+    "VERILOG_FILES": [
+        "dir::src/counter32_v2.v"
+    ],
+
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 10,
+
+    "PNR_SDC_FILE": "dir::counter.sdc",
+    "SIGNOFF_SDC_FILE": "dir::counter.sdc",
+
+    "IO_PIN_ORDER_CFG": "dir::pin_order.cfg",
+
+    "FP_CORE_UTIL": 25,
+    "PL_TARGET_DENSITY": 0.50
+}

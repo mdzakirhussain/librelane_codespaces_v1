@@ -1,0 +1,33 @@
+export TAG=my_run
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to Checker.LintWarnings
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.JsonHeader --to OpenROAD.STAPrePNR
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.Floorplan --to OpenROAD.TapEndcapInsertion
+python3 -m librelane --dockerized ./config.json --last-run --from Odb.AddPDNObstructions --to Odb.AddRoutingObstructions
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacement --to Odb.ManualGlobalPlacement
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedPlacement
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CTS --to OpenROAD.STAMidPNR-2
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalRouting --to OpenROAD.STAMidPNR-3
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.DetailedRouting --to Checker.WireLength
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.FillInsertion --to Odb.CellFrequencyTables
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.RCX --to OpenROAD.IRDropReport
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Odb.CheckDesignAntennaProperties
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to Checker.XOR
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.EQY --to Misc.ReportManufacturability
+python3 -m librelane --dockerized ./config.json --last-run --only <StepID>
+python3 -c "from librelane.flows import Flow; [print(i, s.id) for i, s in enumerate(Flow.factory.get('Classic').Steps, 1)]"
+grep "Gating variable" runs/$TAG/flow.log
+grep -iE "skipping|Returning state unaltered" runs/$TAG/flow.log
+ls -d runs/$TAG/*-yosys-synthesis
+ls runs/$TAG/*-yosys-synthesis/{*.log,COMMANDS} 2>/dev/null
+ls -d runs/$TAG/*-openroad-repairantennas/[0-9]-*/
+python3 -c "import json;r=json.load(open('runs/$TAG/resolved.json'));[print(k,'=',r[k]) for k in sorted(r) if k.startswith('RUN_')]"
+ls -la runs/$TAG/final/gds/
+cat runs/$TAG/final/metrics.csv
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" -c 'RUN_POST_GRT_DESIGN_REPAIR=true' -c 'RUN_POST_GRT_RESIZER_TIMING=true' -c 'RUN_EQY=true'
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" -c 'DIODE_ON_PORTS="both"'
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInKLayout
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInMagic

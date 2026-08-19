@@ -1,0 +1,23 @@
+export TAG=my_run
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" --to Checker.LintWarnings
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.JsonHeader --to OpenROAD.STAPrePNR
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.Floorplan --to OpenROAD.TapEndcapInsertion
+python3 -m librelane --dockerized ./config.json --last-run --from Odb.AddPDNObstructions --to Odb.AddRoutingObstructions
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacementSkipIO --to Odb.ApplyDEFTemplate
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalPlacement --to Odb.ManualGlobalPlacement
+python3 -m librelane --dockerized ./config.json --last-run --only OpenROAD.DetailedPlacement
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CTS --to OpenROAD.STAMidPNR-2
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.GlobalRouting --to OpenROAD.STAMidPNR-3
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.DetailedRouting --to Checker.WireLength
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.FillInsertion --to Odb.CellFrequencyTables
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.RCX --to OpenROAD.IRDropReport
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Odb.CheckDesignAntennaProperties
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to Checker.XOR
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+python3 -m librelane --dockerized ./config.json --last-run --from Yosys.EQY --to Misc.ReportManufacturability
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" -c 'RUN_POST_GRT_DESIGN_REPAIR=true' -c 'RUN_POST_GRT_RESIZER_TIMING=true' -c 'RUN_EQY=true'
+python3 -m librelane --dockerized ./config.json --run-tag "$TAG" -c 'DIODE_ON_PORTS="both"'
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInOpenROAD
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInKLayout
+python3 -m librelane --dockerized ./config.json --last-run --flow OpenInMagic

@@ -1,0 +1,141 @@
+================================================================================
+ LibreLane : SYNTHESIS -> GDSII
+ Run these inside WSL2/Linux, from within `nix develop` in the librelane repo.
+ Working directory = your design folder (containing spm.v and config.json).
+================================================================================
+
+cd ~/designs/spm
+TAG=spm_run
+
+
+--------------------------------------------------------------------------------
+ OPTION A - EVERYTHING IN ONE COMMAND
+--------------------------------------------------------------------------------
+
+librelane --pdk sky130A --pdk-root ~/.ciel ./config.json --run-tag $TAG
+
+
+--------------------------------------------------------------------------------
+ OPTION B - STEP BY STEP (run in this exact order)
+--------------------------------------------------------------------------------
+
+# 1  Synthesis (RTL -> gate-level netlist)
+librelane ./config.json --run-tag $TAG --to Yosys.Synthesis
+
+python3 -m librelane --dockerized ./config.json --run-tag fa --to Yosys.Synthesis
+
+# 2  Floorplanning (die/core area + placement site grid)
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.Floorplan --to OpenROAD.Floorplan
+
+python3 -m librelane --dockerized ./config.json --run-tag fa --last-run --from OpenROAD.Floorplan --to OpenROAD.Floorplan
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.Floorplan --to OpenROAD.Floorplan
+
+
+# 3  Tap / Endcap cell insertion
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.TapEndcapInsertion --to OpenROAD.TapEndcapInsertion
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.TapEndcapInsertion --to OpenROAD.TapEndcapInsertion
+
+# 4  I/O pin placement
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.IOPlacement --to OpenROAD.IOPlacement
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.IOPlacement --to OpenROAD.IOPlacement
+
+# 5  Power Distribution Network
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.GeneratePDN --to OpenROAD.GeneratePDN
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GeneratePDN --to OpenROAD.GeneratePDN
+
+# 6  Global placement
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.GlobalPlacement --to OpenROAD.GlobalPlacement
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GlobalPlacement --to OpenROAD.GlobalPlacement
+
+# 7  Detailed placement (legalization)
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.DetailedPlacement --to OpenROAD.DetailedPlacement
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.DetailedPlacement --to OpenROAD.DetailedPlacement
+
+# 8  Clock Tree Synthesis
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.CTS --to OpenROAD.CTS
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.CTS --to OpenROAD.CTS
+
+# 9  Global routing
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.GlobalRouting --to OpenROAD.GlobalRouting
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.GlobalRouting --to OpenROAD.GlobalRouting
+
+# 10 Detailed routing (longest step)
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.DetailedRouting --to OpenROAD.DetailedRouting
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.DetailedRouting --to OpenROAD.DetailedRouting
+
+# 11 Fill / decap insertion
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.FillInsertion --to OpenROAD.FillInsertion
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.FillInsertion --to OpenROAD.FillInsertion
+
+# 12 Parasitic extraction (SPEF)
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.RCX --to OpenROAD.RCX
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.RCX --to OpenROAD.RCX
+
+# 13 Post-PnR Static Timing Analysis
+librelane ./config.json --run-tag $TAG --last-run --from OpenROAD.STAPostPNR --to OpenROAD.STAPostPNR
+
+python3 -m librelane --dockerized ./config.json  --last-run --from OpenROAD.STAPostPNR --to OpenROAD.STAPostPNR
+
+# 14 Stream-out  <<< PRODUCES THE GDSII >>>
+librelane ./config.json --run-tag $TAG --last-run --from KLayout.StreamOut --to KLayout.StreamOut
+
+python3 -m librelane --dockerized ./config.json  --last-run --from KLayout.StreamOut --to KLayout.StreamOut
+
+
+=============
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Magic.StreamOut
+
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.XOR --to KLayout.XOR
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.StreamOut --to Checker.XOR
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Magic.SpiceExtraction
+
+python3 -m librelane --dockerized ./config.json --last-run --from Netgen.LVS --to Netgen.LVS
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.SpiceExtraction --to Checker.LVS
+
+
+
+==========================================
+
+
+
+=================================================
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Magic.DRC
+
+python3 -m librelane --dockerized ./config.json --last-run --from KLayout.DRC --to KLayout.DRC
+
+python3 -m librelane --dockerized ./config.json --last-run --from Magic.DRC --to Checker.KLayoutDRC
+
+python3 -m librelane --dockerized ./config.json --last-run --from Checker.TrDRC --to Checker.TrDRC
+
+
+
+
+====================================================================
+
+python3 -m librelane --dockerized ./config.json --last-run --from OpenROAD.CheckAntennas --to OpenROAD.CheckAntennas
+
+python3 -m librelane --dockerized ./config.json --last-run --from Checker.IllegalOverlap --to Checker.IllegalOverlap
+
+
+--------------------------------------------------------------------------------
+ RESULT
+--------------------------------------------------------------------------------
+
+ls runs/$TAG/final/gds/          # spm.gds
+klayout runs/$TAG/final/gds/spm.gds
+================================================================================

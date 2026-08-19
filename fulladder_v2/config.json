@@ -1,0 +1,16 @@
+{
+    "DESIGN_NAME": "full_adder",
+
+    "VERILOG_FILES": [
+        "dir::src/full_adder.v"
+    ],
+
+    "CLOCK_PORT": null,
+    "CLOCK_PERIOD": 10,
+
+    "IO_PIN_ORDER_CFG": "dir::pin_order.cfg",
+
+    "FP_SIZING": "absolute",
+    "DIE_AREA":  [0.00, 0.00, 27.60, 27.20],
+    "CORE_AREA": [2.76, 2.72, 24.84, 24.48]
+}
